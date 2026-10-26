@@ -459,3 +459,69 @@ def compliance_status(pid:int,asset_id:int,user:User=Depends(authenticated),db:S
         'evidence':[{'id':c.id,'kind':c.kind,'status':c.status,'required':c.required,'valid_through':c.valid_through,'evidence_ref':c.evidence_ref} for c in certs],
         'holds':[{'id':h.id,'status':h.status,'reason':h.reason} for h in holds],
         'basis':'Internal evidence workflow; not statutory certification verification'}
+
+
+# E6: evidence for actual usage; Planning allocation remains authoritative.
+from decimal import Decimal
+class EquipmentUsageInput(BaseModel):
+    request_key: str=Field(min_length=8,max_length=100)
+    allocation_id: int=Field(gt=0)
+    starts_at: datetime
+    ends_at: datetime
+    operating_hours: Decimal=Field(ge=0,decimal_places=3)
+    idle_hours: Decimal=Field(ge=0,decimal_places=3)
+    breakdown_hours: Decimal=Field(ge=0,decimal_places=3)
+    maintenance_hours: Decimal=Field(ge=0,decimal_places=3)
+    meter_start: Decimal|None=Field(default=None,ge=0,decimal_places=3)
+    meter_end: Decimal|None=Field(default=None,ge=0,decimal_places=3)
+    fuel_liters: Decimal|None=Field(default=None,ge=0,decimal_places=3)
+    anomaly_note: str|None=Field(default=None,max_length=2000)
+    evidence_ref: str=Field(min_length=3,max_length=240)
+
+
+def usage_view(row):
+    return {k:getattr(row,k) for k in (
+        'id','project_id','asset_id','allocation_id','request_key','starts_at','ends_at',
+        'operating_hours','idle_hours','breakdown_hours','maintenance_hours',
+        'meter_start','meter_end','fuel_liters','anomaly_note','evidence_ref',
+        'recorded_by','recorded_at')}
+
+@router.post('/equipment-assets/{asset_id}/usage',status_code=201)
+def create_equipment_usage(pid:int,asset_id:int,body:EquipmentUsageInput,
+                           user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    equipment_access(db,user,pid)
+    from .workspace_models import PlanningEquipmentUsageRecord
+    from .equipment_usage_rules import validate_usage
+    asset=db.query(PlanningEquipmentAsset).filter_by(
+        id=asset_id,organization_id=user.organization_id,project_id=pid).with_for_update().one_or_none()
+    if asset is None:raise HTTPException(404,'Project equipment not found')
+    if asset.tracking_mode!='Individual':
+        raise HTTPException(409,'Quantity-managed tool pool cannot use individual runtime logging')
+    if db.query(PlanningEquipmentUsageRecord).filter_by(
+            organization_id=user.organization_id,request_key=body.request_key).first():
+        raise HTTPException(409,'Usage request key already used')
+    allocation=db.query(PlanningResourceAllocation).filter_by(
+        id=body.allocation_id,organization_id=user.organization_id,project_id=pid,
+        resource_type='Equipment',resource_ref=f'equipment:{asset_id}').one_or_none()
+    if allocation is None:raise HTTPException(409,'Matching Planning equipment allocation required')
+    history=db.query(PlanningEquipmentUsageRecord).filter_by(
+        organization_id=user.organization_id,asset_id=asset_id).all()
+    validate_usage(body,allocation,history)
+    row=PlanningEquipmentUsageRecord(organization_id=user.organization_id,project_id=pid,
+        asset_id=asset_id,recorded_by=user.id,**body.model_dump())
+    db.add(row);db.commit();db.refresh(row)
+    return usage_view(row)
+
+@router.get('/equipment-assets/{asset_id}/usage')
+def equipment_usage_history(pid:int,asset_id:int,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    access(db,user,pid,True)
+    from .workspace_models import PlanningEquipmentUsageRecord
+    asset=db.query(PlanningEquipmentAsset).filter_by(id=asset_id,
+        organization_id=user.organization_id,project_id=pid).one_or_none()
+    if asset is None:raise HTTPException(404,'Project equipment not found')
+    rows=db.query(PlanningEquipmentUsageRecord).filter_by(
+        organization_id=user.organization_id,project_id=pid,asset_id=asset_id).order_by(
+        PlanningEquipmentUsageRecord.starts_at.desc()).limit(200).all()
+    return {'items':[usage_view(row) for row in rows],
+        'basis':'Unverified equipment usage evidence; not certified progress or financial posting',
+        'limit':200}

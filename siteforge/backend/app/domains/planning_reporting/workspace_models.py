@@ -1,6 +1,6 @@
 """Planning execution structures; project and work packages stay owned by their existing domains."""
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, ForeignKey, JSON, Text, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, ForeignKey, JSON, Text, Numeric, UniqueConstraint
 from app.db import Base
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -492,3 +492,28 @@ class PlanningEquipmentSafetyHold(Base):
     released_by=Column(Integer,nullable=True)
     release_evidence_ref=Column(String(240),nullable=True)
     released_at=Column(DateTime(timezone=True),nullable=True)
+
+
+class PlanningEquipmentUsageRecord(Base):
+    """Append-only operating evidence; does not certify Construction or Finance progress."""
+    __tablename__ = 'planning_equipment_usage_records'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_usage_request_key'),)
+    id=Column(Integer,primary_key=True)
+    organization_id=Column(Integer,nullable=False,index=True)
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=False,index=True)
+    asset_id=Column(Integer,ForeignKey('planning_equipment_assets.id'),nullable=False,index=True)
+    allocation_id=Column(Integer,ForeignKey('planning_resource_allocations.id'),nullable=False)
+    request_key=Column(String(100),nullable=False)
+    starts_at=Column(DateTime(timezone=True),nullable=False)
+    ends_at=Column(DateTime(timezone=True),nullable=False)
+    operating_hours=Column(Numeric(12,3),nullable=False)
+    idle_hours=Column(Numeric(12,3),nullable=False)
+    breakdown_hours=Column(Numeric(12,3),nullable=False)
+    maintenance_hours=Column(Numeric(12,3),nullable=False)
+    meter_start=Column(Numeric(16,3),nullable=True)
+    meter_end=Column(Numeric(16,3),nullable=True)
+    fuel_liters=Column(Numeric(16,3),nullable=True)
+    anomaly_note=Column(Text,nullable=True)
+    evidence_ref=Column(String(240),nullable=False)
+    recorded_by=Column(Integer,nullable=False)
+    recorded_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
