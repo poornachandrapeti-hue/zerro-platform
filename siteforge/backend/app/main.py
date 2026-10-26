@@ -105,7 +105,7 @@ app.include_router(planning_bulk_import_router)
 from .domains.planning_reporting.milestone_evidence_router import router as planning_milestone_evidence_router
 app.include_router(planning_milestone_evidence_router)
 
-# Phase 13 — non-persistent, authenticated planning forecast previews.
+# Phase 13 â€” non-persistent, authenticated planning forecast previews.
 from .domains.planning_reporting.forecast_router import router as planning_forecast_router
 app.include_router(planning_forecast_router)
 
@@ -132,6 +132,8 @@ from .domains.progress_monitoring.stage_router import router as progress_stage_s
 app.include_router(progress_stage_schemes_router)
 from .domains.progress_monitoring.source_evidence import router as progress_source_evidence_router
 app.include_router(progress_source_evidence_router)
+from .domains.progress_monitoring.p2c_source_readback import router as progress_p2c_source_router
+app.include_router(progress_p2c_source_router)
 from .domains.progress_monitoring.milestone_router import router as progress_milestone_preview_router
 app.include_router(progress_milestone_preview_router)
 
@@ -153,7 +155,7 @@ from .domains.contracts.router import router as contracts_router, partner as par
 app.include_router(contracts_router)
 app.include_router(partner_contracts_router)
 
-# Stores & Inventory — Phase 1 warehouse/location master
+# Stores & Inventory â€” Phase 1 warehouse/location master
 from .domains.stores_inventory.router import router as stores_router
 app.include_router(stores_router)
 
