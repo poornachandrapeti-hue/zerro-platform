@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "./api";
+import { EquipmentOperations } from "./equipment-operations";
 import type { Session } from "./types";
 
 type Asset = { id:number;asset_code:string;name:string;equipment_type:string;status:string;inspection_valid_through:string|null;inspection_review_status:string|null;inspection_evidence_ref:string|null;operational_condition?:string|null;ownership_type?:string|null;location_id?:number|null };
@@ -46,7 +47,7 @@ export function EquipmentHome({session,initialProjectId}:{session:Session;initia
         {canManage&&<form onSubmit={e=>void create(e)} style={{display:"flex",flexWrap:"wrap",gap:8}}><input required name="asset_code" placeholder="Asset code"/><input required name="name" placeholder="Equipment description"/><input required name="equipment_type" placeholder="Equipment category"/><button disabled={busy}>Register</button></form>}
         <div style={{display:"flex",gap:8,marginTop:12}}><input aria-label="Search equipment" value={filter} onChange={e=>setFilter(e.target.value)} placeholder="Search code / equipment / category"/><button disabled={busy} onClick={()=>void refresh()}>Refresh</button></div>
         <div style={{overflowX:"auto",marginTop:12}}><table style={{width:"100%"}}><thead><tr><th>Asset code</th><th>Name</th><th>Type</th><th>Status</th><th>Inspection</th><th>Valid through</th><th>Planning reference</th></tr></thead><tbody>{shown.map(x=><tr key={x.id}><td>{x.asset_code}</td><td>{x.name}</td><td>{x.equipment_type}</td><td>{x.status}</td><td>{x.inspection_review_status||"Unverified"}</td><td>{x.inspection_valid_through||"—"}</td><td>equipment:{x.id}</td></tr>)}</tbody></table></div>{!busy&&!shown.length&&<p>No equipment records found.</p>}
-      </div>:<div style={card}><h3>{tab}</h3>
+      </div>:["Availability","Allocations","Usage","Custody"].includes(tab)?<EquipmentOperations key={`${project}-${tab}`} project={project} tab={tab as "Availability"|"Allocations"|"Usage"|"Custody"} assets={items} />:<div style={card}><h3>{tab}</h3>
        <p style={{color:"#52657d"}}>This screen is reserved for authoritative Equipment workflow data. It does not invent {tab.toLowerCase()} values or imply approved transactions.</p>
        {tab==="Availability"&&<p>Confirmed allocation windows, open maintenance holds and valid HSE releases must be reconciled server-side before availability can be shown.</p>}
        {tab==="Allocations"&&<p>Booking confirmation remains under Planning until the integration endpoint and project permissions are verified.</p>}
