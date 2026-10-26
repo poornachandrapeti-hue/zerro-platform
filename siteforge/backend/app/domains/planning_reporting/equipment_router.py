@@ -1,14 +1,14 @@
 """Phase 23 organization equipment registry and controlled reservation decisions."""
 from datetime import date, datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 from app.db import get_db
 from app.domains.identity_projects.models import User
 from app.domains.identity_projects.security import authenticated
 from .workspace_router import access
 from app.domains.identity_projects.models import Membership, Role
-from .workspace_models import PlanningEquipmentAsset, PlanningResourceAllocation
+from .workspace_models import PlanningEquipmentAsset, PlanningResourceAllocation, PlanningEquipmentMasterChange
 from .equipment_rules import can_confirm
 from .allocation_rules import conflict_ids
 
@@ -20,6 +20,79 @@ class AssetInput(BaseModel):
     equipment_type: str=Field(min_length=1,max_length=100)
     inspection_valid_through: date|None=None
     inspection_evidence_ref: str|None=Field(default=None,max_length=240)
+
+# E2 metadata is separate from asset identity and inspection approval.
+# Existing register/booking consumers continue using the same asset ID.
+class MasterUpdate(BaseModel):
+    make: str|None=Field(default=None,max_length=120)
+    model: str|None=Field(default=None,max_length=120)
+    serial_number: str|None=Field(default=None,max_length=160)
+    owner_company: str|None=Field(default=None,max_length=200)
+    ownership_type: str=Field(pattern='^(Owned|Hired|Subcontractor)$')
+    location: str|None=Field(default=None,max_length=200)
+    operating_condition: str=Field(pattern='^(Unknown|Serviceable|Restricted|UnderRepair|Unserviceable)$')
+    capacity: str|None=Field(default=None,max_length=160)
+    operating_specs: dict|None=None
+    mobilized_on: date|None=None
+    demobilized_on: date|None=None
+    hire_contract_ref: str|None=Field(default=None,max_length=160)
+    maintenance_requirements: str|None=Field(default=None,max_length=2000)
+    tracking_mode: str=Field(pattern='^(Individual|QuantityManaged)$')
+    quantity: int=Field(ge=1,le=1000000)
+    reason: str=Field(min_length=5,max_length=1000)
+
+    @model_validator(mode='after')
+    def check(self):
+        if self.demobilized_on and not self.mobilized_on:
+            raise ValueError('Mobilization date required before demobilization')
+        if self.demobilized_on and self.demobilized_on < self.mobilized_on:
+            raise ValueError('Demobilization cannot precede mobilization')
+        if self.ownership_type=='Hired' and not self.hire_contract_ref:
+            raise ValueError('Hired assets require a hire contract reference')
+        if self.tracking_mode=='Individual' and self.quantity != 1:
+            raise ValueError('Individual assets must have quantity 1')
+        if self.tracking_mode=='QuantityManaged' and self.serial_number:
+            raise ValueError('Quantity-managed tools cannot carry a single serial number')
+        return self
+
+MASTER_FIELDS=('make','model','serial_number','owner_company','ownership_type','location',
+               'operating_condition','capacity','operating_specs','mobilized_on',
+               'demobilized_on','hire_contract_ref','maintenance_requirements','tracking_mode','quantity')
+
+def master_view(a):
+    from .equipment_master_rules import master_view as as_master_view
+    return as_master_view(a)
+
+@router.get('/equipment-assets/{asset_id}/master')
+def read_master(pid:int,asset_id:int,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    access(db,user,pid,True)
+    a=db.query(PlanningEquipmentAsset).filter_by(id=asset_id,organization_id=user.organization_id).one_or_none()
+    if not a or (a.project_id is not None and a.project_id != pid):
+        raise HTTPException(404,'Equipment not found')
+    return master_view(a)
+
+@router.put('/equipment-assets/{asset_id}/master')
+def update_master(pid:int,asset_id:int,body:MasterUpdate,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    equipment_access(db,user,pid)
+    a=db.query(PlanningEquipmentAsset).filter_by(id=asset_id,organization_id=user.organization_id).with_for_update().one_or_none()
+    if not a:raise HTTPException(404,'Equipment not found')
+    # Prevent unauthorized re-assignment of the same organization-wide asset to another project.
+    if a.project_id is not None and a.project_id != pid:
+        raise HTTPException(409,'Asset is assigned to a different project')
+    from .equipment_master_rules import validate_master_transition
+    before=master_view(a)
+    if a.project_id is None:
+        a.project_id=pid
+    changes=body.model_dump(exclude={'reason'})
+    validate_master_transition(a,changes,db,user.organization_id)
+    for key,val in changes.items():setattr(a,key,val)
+    after=master_view(a)
+    if before==after:raise HTTPException(409,'No master-data changes to record')
+    db.add(PlanningEquipmentMasterChange(organization_id=user.organization_id,asset_id=a.id,
+        project_id=pid,changed_by=user.id,action='Updated',reason=body.reason.strip(),
+        before_state=before,after_state=after))
+    db.commit()
+    return after
 
 class InspectionUpdate(BaseModel):
     valid_through:date
