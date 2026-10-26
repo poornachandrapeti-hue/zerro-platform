@@ -2,7 +2,7 @@ import { FormEvent, Fragment, useCallback, useEffect, useMemo, useState } from "
 import { AlertTriangle, Building2, CalendarDays, ChevronDown, ChevronRight, CircleDollarSign, Gauge, Landmark, LayoutDashboard, ListTodo, MapPin, Pencil, Plus, Search, Trash2, UsersRound, Wrench, Zap } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "./api";
-import type { LiveVerifiedProgress, PlanningMonitor } from "./api";
+import type { LiveVerifiedProgress, PlanningMonitor, Phase9FinanceMonitor } from "./api";
 import type { Contractor, Dashboard, Discipline, ProjectListItem, Role, SubTask, WorkPackage } from "./types";
 
 const roles: Role[] = [
@@ -148,6 +148,9 @@ export default function App() {
   const [dashboard, setDashboard] = useState<Dashboard>();
   const [planningSummary, setPlanningSummary] = useState<PlanningMonitor>();
   const [planningError, setPlanningError] = useState("");
+  const [financeMonitor, setFinanceMonitor] = useState<Phase9FinanceMonitor>();
+  const [financeMonitorError, setFinanceMonitorError] = useState("");
+  const [financeStatus, setFinanceStatus] = useState("ALL");
   const [liveProgress, setLiveProgress] = useState<LiveVerifiedProgress>();
   const [liveState, setLiveState] = useState<"loading" | "available" | "unavailable">("loading");
   const [liveError, setLiveError] = useState("");
@@ -221,6 +224,36 @@ export default function App() {
     void pull();
     const timer = window.setInterval(() => void pull(), 60000);
     return () => {active = false; window.clearInterval(timer);};
+  }, [projectId, roleIndex]);
+
+  useEffect(() => {
+    // Fail closed on a project or role change; never display prior-scope proposal data.
+    setFinanceMonitor(undefined);
+    setFinanceMonitorError("");
+    setFinanceStatus("ALL");
+    if (!projectId) return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const data = await api.phase9FinanceMonitor(projectId, role);
+        if (!active) return;
+        // Do not accept a snapshot that claims booked values or certified scope.
+        if (data.gl_posted_verified !== false || data.inventory_valuation_certified !== false ||
+            data.billing_certified !== false || data.complete_history !== false ||
+            data.read_only !== true || data.record_count !== data.proposal_records.length) {
+          throw new Error("Unsupported Finance assurance or malformed sample");
+        }
+        setFinanceMonitor(data);
+        setFinanceMonitorError("");
+      } catch (e) {
+        if (!active) return;
+        setFinanceMonitor(undefined);
+        setFinanceMonitorError(e instanceof Error ? e.message : "Finance monitoring unavailable");
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60000);
+    return () => { active = false; window.clearInterval(timer); };
   }, [projectId, roleIndex]);
 
   useEffect(() => {
@@ -671,6 +704,34 @@ export default function App() {
                 <p><b>{new Set(packages.map((item) => item.contractor.id)).size}</b><small>Active contractors</small></p>
               </div>
             </div>
+
+            <section className="panel verified-panel" aria-label="Finance proposal monitoring">
+              <div className="panel-title"><div><small>ZERROBUILD FINANCE · READ ONLY · PROPOSAL SAMPLE</small><h3>Stores → Finance proposal monitoring</h3></div></div>
+              <p className="verified-note">Approval and proposal status only. <b>Not GL-posted, not certified inventory valuation, and not a project-wide financial balance.</b></p>
+              {financeMonitorError && <p className="verified-error" role="alert">Finance monitoring unavailable or not authorized: {financeMonitorError}</p>}
+              {!financeMonitor && !financeMonitorError && <p className="verified-note">Loading Finance proposal sample…</p>}
+              {financeMonitor && <>
+                <p className="verified-note"><b>Source:</b> {financeMonitor.source} · <b>Snapshot:</b> {new Date(financeMonitor.as_of).toLocaleString()} · {financeMonitor.coverage}</p>
+                <div className="planning-executive-stats" aria-label="Finance proposal sample status">
+                  <div><strong>{financeMonitor.record_count}</strong><span>Sampled proposals</span></div>
+                  {(["Draft", "Pending Review", "Approved", "Rejected"] as const).map((status) =>
+                    <div key={status}><strong>{financeMonitor.status_counts[status] ?? 0}</strong><span>{status}</span></div>)}
+                </div>
+                <label htmlFor="phase9-finance-status">Filter proposal status </label>
+                <select id="phase9-finance-status" value={financeStatus} onChange={(e) => setFinanceStatus(e.target.value)}>
+                  <option value="ALL">All statuses</option>
+                  {(["Draft", "Pending Review", "Approved", "Rejected"] as const).map((status) => <option key={status} value={status}>{status}</option>)}
+                </select>
+                <div className="table-scroll" role="region" aria-label="Finance proposal source references" tabIndex={0}>
+                  <table><thead><tr><th>Proposal ID</th><th>Stock movement line ID</th><th>Status (not posted)</th><th>Revision</th></tr></thead>
+                    <tbody>{financeMonitor.proposal_records.filter((row) => financeStatus === "ALL" || row.status === financeStatus).map((row) =>
+                      <tr key={row.proposal_id}><td>{row.proposal_id}</td><td>{row.source_movement_line_id}</td><td>{row.status}</td><td>{row.proposal_revision}</td></tr>)}
+                    {!financeMonitor.proposal_records.some((row) => financeStatus === "ALL" || row.status === financeStatus) &&
+                      <tr><td colSpan={4}>No matching proposals in this bounded sample</td></tr>}
+                    </tbody></table>
+                </div>
+              </>}
+            </section>
 
             <section className="panel verified-panel" aria-label="Approved SiteForge Planning executive monitoring">
               <div className="panel-title"><div><small>SITEFORGE PLANNING · READ ONLY</small><h3>Executive planning monitoring</h3></div></div>

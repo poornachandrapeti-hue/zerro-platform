@@ -63,6 +63,27 @@ export type PlanningMonitor = {
   note: string;
 };
 
+export type Phase9FinanceMonitor = {
+  source: "zerrobuild.financials.phase9_proposal_monitor";
+  organization_id: number;
+  project_id: number;
+  as_of: string;
+  read_only: true;
+  complete_history: false;
+  gl_posted_verified: false;
+  inventory_valuation_certified: false;
+  billing_certified: false;
+  coverage: string;
+  record_count: number;
+  status_counts: Record<string, number>;
+  proposal_records: Array<{
+    proposal_id: number;
+    source_movement_line_id: number;
+    status: "Draft" | "Pending Review" | "Approved" | "Rejected";
+    proposal_revision: number;
+  }>;
+};
+
 export type ProgressPayload = { actual_progress: number; actual_cost: number; status: string };
 export type ContractorPayload = { code?: string; name: string; contact_name: string; phone: string };
 export type ProjectPayload = {
@@ -141,6 +162,8 @@ export const api = {
       method: "DELETE",
       headers: headers(role),
     }),
+  phase9FinanceMonitor: (projectId: number, role: Role) =>
+    request<Phase9FinanceMonitor>(`/api/projects/${projectId}/phase9-finance-monitor`, role, { headers: headers(role), cache: "no-store" }),
   planningMonitor: (projectId: number, role: Role) =>
     request<PlanningMonitor>(`/api/projects/${projectId}/planning-monitor`, role),
   liveProgress: (projectId: number, role: Role) =>
