@@ -1,6 +1,6 @@
 """Planning execution structures; project and work packages stay owned by their existing domains."""
 from datetime import datetime, timezone
-from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, ForeignKey, JSON, Text, UniqueConstraint
+from sqlalchemy import Column, Integer, String, Boolean, Date, DateTime, ForeignKey, JSON, Text, Numeric, UniqueConstraint
 from app.db import Base
 
 def utcnow(): return datetime.now(timezone.utc)
@@ -333,6 +333,94 @@ class PlanningEquipmentAsset(Base):
     inspection_reviewed_at=Column(DateTime(timezone=True),nullable=True)
     created_by=Column(Integer,nullable=False)
     created_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
+    # E2 master metadata: identity remains in this existing table.
+    make=Column(String(120),nullable=True)
+    model=Column(String(120),nullable=True)
+    serial_number=Column(String(160),nullable=True)
+    owner_company=Column(String(200),nullable=True)
+    ownership_type=Column(String(24),nullable=False,default='Owned')
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=True,index=True)
+    location=Column(String(200),nullable=True)
+    custodian_user_id=Column(Integer,nullable=True)
+    operating_condition=Column(String(24),nullable=False,default='Unknown')
+    capacity=Column(String(160),nullable=True)
+    operating_specs=Column(JSON,nullable=True)
+    mobilized_on=Column(Date,nullable=True)
+    demobilized_on=Column(Date,nullable=True)
+    hire_contract_ref=Column(String(160),nullable=True)
+    maintenance_requirements=Column(Text,nullable=True)
+    tracking_mode=Column(String(24),nullable=False,default='Individual')
+    quantity=Column(Integer,nullable=False,default=1)
+
+
+class PlanningEquipmentMasterChange(Base):
+    """Append-only audit of equipment master metadata changes; not a custody movement ledger."""
+    __tablename__='planning_equipment_master_changes'
+    id=Column(Integer,primary_key=True)
+    organization_id=Column(Integer,nullable=False,index=True)
+    asset_id=Column(Integer,ForeignKey('planning_equipment_assets.id'),nullable=False,index=True)
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=False)
+    changed_by=Column(Integer,nullable=False)
+    changed_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
+    action=Column(String(30),nullable=False)
+    reason=Column(Text,nullable=False)
+    before_state=Column(JSON,nullable=False)
+    after_state=Column(JSON,nullable=False)
+
+
+class PlanningEquipmentCustodyMovement(Base):
+    """E3 append-only operational custody events; never a Stores stock ledger."""
+    __tablename__ = 'planning_equipment_custody_movements'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_custody_request'),)
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False, index=True)
+    asset_id = Column(Integer, ForeignKey('planning_equipment_assets.id'), nullable=False, index=True)
+    allocation_id = Column(Integer, ForeignKey('planning_resource_allocations.id'), nullable=True)
+    parent_issue_id = Column(Integer, ForeignKey('planning_equipment_custody_movements.id'), nullable=True)
+    action = Column(String(20), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    custodian_user_id = Column(Integer, nullable=False)
+    location = Column(String(200), nullable=False)
+    reason = Column(Text, nullable=False)
+    evidence_ref = Column(String(240), nullable=False)
+    request_key = Column(String(100), nullable=False)
+    recorded_by = Column(Integer, nullable=False)
+    recorded_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PlanningEquipmentMaintenanceOrder(Base):
+    """One maintenance lifecycle per individual asset; no Stores or Finance ledger."""
+    __tablename__ = 'planning_equipment_maintenance_orders'
+    __table_args__ = (UniqueConstraint('organization_id', 'request_key', name='uq_equipment_maintenance_request'),)
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False, index=True)
+    asset_id = Column(Integer, ForeignKey('planning_equipment_assets.id'), nullable=False, index=True)
+    request_key = Column(String(100), nullable=False)
+    kind = Column(String(20), nullable=False)
+    status = Column(String(24), nullable=False, default='Reported')
+    title = Column(String(200), nullable=False)
+    reported_reason = Column(Text, nullable=False)
+    due_on = Column(Date, nullable=True)
+    created_by = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    repair_completed_by = Column(Integer, nullable=True)
+    repair_evidence_ref = Column(String(240), nullable=True)
+    released_by = Column(Integer, nullable=True)
+    released_at = Column(DateTime(timezone=True), nullable=True)
+
+class PlanningEquipmentMaintenanceEvent(Base):
+    """Append-only E4 transition evidence and reviewer trace."""
+    __tablename__ = 'planning_equipment_maintenance_events'
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey('planning_equipment_maintenance_orders.id'), nullable=False, index=True)
+    old_status = Column(String(24), nullable=True)
+    new_status = Column(String(24), nullable=False)
+    evidence_ref = Column(String(240), nullable=False)
+    actor_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
 
 class PlanningEquipmentInspectionDecision(Base):
@@ -366,3 +454,66 @@ class PartnerPlanningCommitment(Base):
     reviewed_by = Column(Integer, nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     review_note = Column(Text, nullable=False, default='')
+
+
+class PlanningEquipmentComplianceEvidence(Base):
+    """Evidence review for calibration, certification and inspection; not a statutory authority."""
+    __tablename__ = 'planning_equipment_compliance_evidence'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_compliance_request'),)
+    id=Column(Integer,primary_key=True)
+    organization_id=Column(Integer,nullable=False,index=True)
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=False,index=True)
+    asset_id=Column(Integer,ForeignKey('planning_equipment_assets.id'),nullable=False,index=True)
+    request_key=Column(String(100),nullable=False)
+    kind=Column(String(24),nullable=False)
+    evidence_ref=Column(String(240),nullable=False)
+    valid_through=Column(Date,nullable=False)
+    required=Column(Boolean,nullable=False,default=True)
+    status=Column(String(20),nullable=False,default='Pending')
+    created_by=Column(Integer,nullable=False)
+    reviewed_by=Column(Integer,nullable=True)
+    created_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
+    reviewed_at=Column(DateTime(timezone=True),nullable=True)
+
+class PlanningEquipmentSafetyHold(Base):
+    """Independent HSE operational restriction, not an asset deletion or stock movement."""
+    __tablename__ = 'planning_equipment_safety_holds'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_safety_hold_request'),)
+    id=Column(Integer,primary_key=True)
+    organization_id=Column(Integer,nullable=False,index=True)
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=False,index=True)
+    asset_id=Column(Integer,ForeignKey('planning_equipment_assets.id'),nullable=False,index=True)
+    request_key=Column(String(100),nullable=False)
+    reason=Column(Text,nullable=False)
+    evidence_ref=Column(String(240),nullable=False)
+    status=Column(String(20),nullable=False,default='Active')
+    created_by=Column(Integer,nullable=False)
+    created_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
+    released_by=Column(Integer,nullable=True)
+    release_evidence_ref=Column(String(240),nullable=True)
+    released_at=Column(DateTime(timezone=True),nullable=True)
+
+
+class PlanningEquipmentUsageRecord(Base):
+    """Append-only operating evidence; does not certify Construction or Finance progress."""
+    __tablename__ = 'planning_equipment_usage_records'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_usage_request_key'),)
+    id=Column(Integer,primary_key=True)
+    organization_id=Column(Integer,nullable=False,index=True)
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=False,index=True)
+    asset_id=Column(Integer,ForeignKey('planning_equipment_assets.id'),nullable=False,index=True)
+    allocation_id=Column(Integer,ForeignKey('planning_resource_allocations.id'),nullable=False)
+    request_key=Column(String(100),nullable=False)
+    starts_at=Column(DateTime(timezone=True),nullable=False)
+    ends_at=Column(DateTime(timezone=True),nullable=False)
+    operating_hours=Column(Numeric(12,3),nullable=False)
+    idle_hours=Column(Numeric(12,3),nullable=False)
+    breakdown_hours=Column(Numeric(12,3),nullable=False)
+    maintenance_hours=Column(Numeric(12,3),nullable=False)
+    meter_start=Column(Numeric(16,3),nullable=True)
+    meter_end=Column(Numeric(16,3),nullable=True)
+    fuel_liters=Column(Numeric(16,3),nullable=True)
+    anomaly_note=Column(Text,nullable=True)
+    evidence_ref=Column(String(240),nullable=False)
+    recorded_by=Column(Integer,nullable=False)
+    recorded_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
