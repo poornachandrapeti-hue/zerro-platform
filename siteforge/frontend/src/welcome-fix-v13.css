@@ -1,0 +1,87 @@
+/* V13: remove V12's clipped negative-offset positioning. A home screen's
+   hero lives across the entire shell and is allowed to paint beyond main's
+   grid column. Its original data and markup are preserved. */
+@media (min-width:761px) {
+  .shell.shell-home:has(.ref-dashboard),
+  .shell.shell-home:has(.ref-partner) {
+    overflow-x:clip !important;
+    overflow-y:auto !important;
+    max-height:100dvh !important;
+  }
+  .shell.shell-home:has(.ref-dashboard)>main,
+  .shell.shell-home:has(.ref-partner)>main {
+    overflow:visible !important;
+    z-index:3 !important;
+    height:auto !important;
+    min-height:100dvh !important;
+  }
+  .shell.shell-home:has(.ref-dashboard) .ref-dashboard,
+  .shell.shell-home:has(.ref-partner) .ref-partner,
+  .shell.shell-home:has(.ref-dashboard) .ref-content,
+  .shell.shell-home:has(.ref-partner) .ref-partner-main,
+  .shell.shell-home:has(.ref-partner) .ref-partner-left {
+    overflow:visible !important;
+  }
+  .shell.shell-home:has(.ref-dashboard) .ref-banner,
+  .shell.shell-home:has(.ref-partner) .ref-partner-hero {
+    left:calc(-1 * var(--zb-side)) !important;
+    width:calc(100% + var(--zb-side)) !important;
+    box-sizing:border-box !important;
+    padding:17px 26px 12px clamp(30px,2.7vw,48px) !important;
+    margin:0 !important;
+    overflow:visible !important;
+    z-index:4 !important;
+    position:relative !important;
+    height:calc(var(--zb-hero) - 77px) !important;
+  }
+  .shell.shell-home:has(.ref-dashboard) .ref-banner h1,
+  .shell.shell-home:has(.ref-partner) .ref-partner-hero h1 {
+    white-space:normal !important;
+    width:auto !important;
+    max-width:min(760px,calc(100vw - 90px)) !important;
+    margin:0 0 7px !important;
+    transform:none!important;
+  }
+  .shell.shell-home:has(.ref-dashboard) .ref-banner h3,
+  .shell.shell-home:has(.ref-dashboard) .ref-banner p,
+  .shell.shell-home:has(.ref-partner) .ref-partner-hero p {
+    width:auto !important;
+    max-width:min(620px,calc(100vw - 90px)) !important;
+    margin-left:0 !important;
+    transform:none !important;
+    white-space:normal !important;
+  }
+  .shell.shell-home:has(.ref-partner) .ref-partner-role-row {
+    grid-row:2 !important;
+    grid-column:1/-1 !important;
+    margin:0 !important;
+    padding:10px 0 12px !important;
+    display:flex !important;
+    align-items:center !important;
+    min-height:64px !important;
+    position:relative !important;
+    z-index:1 !important;
+  }
+  .shell.shell-home:has(.ref-partner) .ref-partner-role-row .ref-role-buttons {
+    position:static !important;
+    margin:0 !important;
+    display:flex !important;
+    flex-wrap:wrap !important;
+    gap:10px !important;
+  }
+  .shell.shell-home:has(.ref-dashboard)>aside,
+  .shell.shell-home:has(.ref-partner)>aside {
+    align-self:start !important;
+    height:calc(100dvh - var(--zb-hero)) !important;
+    overflow-y:auto !important;
+  }
+}
+@media (max-width:760px) {
+  .shell.shell-home .ref-banner,
+  .shell.shell-home .ref-partner-hero {
+    left:0!important;
+    width:100%!important;
+    padding-left:18px!important;
+    overflow:visible!important;
+  }
+}

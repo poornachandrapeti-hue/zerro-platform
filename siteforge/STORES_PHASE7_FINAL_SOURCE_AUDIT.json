@@ -1,0 +1,29 @@
+{
+  "phase": "Phase 7",
+  "kind": "offline_source_contract_audit",
+  "checks": {
+    "preservation routes mounted": true,
+    "cycle count routes mounted": true,
+    "adjustment review routes mounted": true,
+    "scrap routes mounted": true,
+    "monitor feed routes mounted": true,
+    "preservation holds in receipt-lot reservation": true,
+    "preservation holds in receipt-lot issue": true,
+    "phase 7 focused regression tests": true,
+    "one migration head": true
+  },
+  "passed": 9,
+  "total": 9,
+  "migration_heads": [
+    "stores_phase7_scrap_disposal"
+  ],
+  "production_ready": false,
+  "limitations": [
+    "PostgreSQL transaction/concurrency tests deferred",
+    "Frontend build and Docker end-to-end unverified",
+    "No authoritative lot-level point-in-time book count",
+    "No stock adjustment or scrap write-off posting",
+    "Preservation holds not complete for transfer lots/legacy writers",
+    "Separate Command Center backend not connected"
+  ]
+}

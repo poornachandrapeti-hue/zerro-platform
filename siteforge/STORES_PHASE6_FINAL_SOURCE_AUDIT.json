@@ -1,0 +1,95 @@
+{
+  "scope": "Phase 6 source-level audit only",
+  "checks": [
+    {
+      "check": "transfer custody workflow",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "vendor return workflow",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "transfer monitoring",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "paired posting and preflight",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "destination QA reconciliation",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "destination QA acceptance",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "transfer reservation activation",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "transfer reservation release",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "transfer lot issue",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "transfer allocation preview",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "material return integration",
+      "passed": true,
+      "errors": []
+    },
+    {
+      "check": "feature gate STORES_TRANSFER_LOT_ISSUE_ENABLED",
+      "passed": true
+    },
+    {
+      "check": "feature gate STORES_TRANSFER_RESERVATION_ACTIVATION_ENABLED",
+      "passed": true
+    },
+    {
+      "check": "feature gate STORES_TRANSFER_RESERVATION_RELEASE_ENABLED",
+      "passed": true
+    },
+    {
+      "check": "feature gate STORES_LOT_WRITER_CUTOVER",
+      "passed": true
+    },
+    {
+      "check": "single migration head",
+      "passed": true,
+      "heads": [
+        "stores_phase6_transfer_return_allocation"
+      ]
+    }
+  ],
+  "passed": 16,
+  "total": 16,
+  "release_ready": false,
+  "stock_posting_enabled": false,
+  "deferred": [
+    "PostgreSQL migration execution and concurrency tests",
+    "Docker and frontend build",
+    "inter-project atomic posting",
+    "transfer reversal handling",
+    "vendor replacement GRN",
+    "separate Command Center runtime connection"
+  ]
+}

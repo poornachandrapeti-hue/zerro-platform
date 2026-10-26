@@ -1,0 +1,11 @@
+# Apply with: docker compose -f compose.yaml -f compose.staging.yaml ...
+services:
+  db:
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-55432}:5432"
+  backend:
+    ports:
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
+  frontend:
+    ports:
+      - "127.0.0.1:${WEB_HOST_PORT:-5173}:80"

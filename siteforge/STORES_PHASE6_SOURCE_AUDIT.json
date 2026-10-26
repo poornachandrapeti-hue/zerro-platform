@@ -1,0 +1,80 @@
+{
+  "scope": "source contracts only: NOT live database, frontend build, or deployment",
+  "results": [
+    {
+      "contract": "transfer request and listing",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "approval, dispatch and same-project receipt",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "destination-project inbox and acceptance",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "independent discrepancy decision",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "custody confirmation",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "vendor return and replacement",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "transfer monitoring",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "preflight and fail-closed posting",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "transfer router mounted",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "vendor return router mounted",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "preflight router mounted",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "monitor router mounted",
+      "status": "PASS",
+      "missing": []
+    },
+    {
+      "contract": "physical transfer posting remains blocked",
+      "status": "PASS",
+      "missing": []
+    }
+  ],
+  "passed": 13,
+  "failed": 0,
+  "production_ready": false,
+  "open_blockers": [
+    "Atomic dual-warehouse lot-provenance-safe posting not implemented",
+    "PostgreSQL concurrency and migration execution deferred",
+    "Vendor acknowledgment is evidence recorded by Procurement, not supplier-authenticated",
+    "Separate Command Center consumer backend not connected",
+    "Frontend TypeScript build and Docker E2E not executed"
+  ]
+}

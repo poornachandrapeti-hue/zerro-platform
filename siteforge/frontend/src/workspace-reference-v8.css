@@ -1,0 +1,140 @@
+/* ZerroBuild V8: single source of truth for Home and Partner home presentation.
+   The existing feature and permission components remain unchanged. */
+@media (min-width: 761px) {
+  .shell.shell-home:has(.ref-dashboard), .shell.shell-home:has(.ref-partner) {
+    --hero-height: 240px; --sidebar-width: 240px;
+    display: grid !important; grid-template-columns: var(--sidebar-width) minmax(0,1fr) !important;
+    grid-template-rows: var(--hero-height) minmax(0,1fr) !important;
+    width:100% !important; height:100dvh !important; max-height:100dvh !important;
+    position:relative !important; overflow:hidden !important; isolation:isolate !important;
+    background:#eef6fc !important;
+  }
+  .shell.shell-home:has(.ref-dashboard)::before, .shell.shell-home:has(.ref-partner)::before {
+    content:"" !important; display:block !important; position:absolute !important;
+    inset:0 0 auto 0 !important; height:var(--hero-height) !important;
+    z-index:0 !important; pointer-events:none !important;
+    background-image:linear-gradient(90deg,rgba(230,243,253,.88) 0%,rgba(234,244,252,.65) 32%,rgba(239,247,254,.1) 70%),url('/hero-plant.jpg') !important;
+    background-size:cover,cover !important; background-position:center,center 54% !important; background-repeat:no-repeat !important;
+  }
+  .shell.shell-home:has(.ref-dashboard)::after, .shell.shell-home:has(.ref-partner)::after {display:none !important;content:none !important}
+  .shell.shell-home:has(.ref-dashboard) > aside, .shell.shell-home:has(.ref-partner) > aside {
+    grid-column:1 !important; grid-row:2 !important; position:relative !important; inset:auto !important;
+    top:auto !important; left:auto !important; bottom:auto !important;
+    margin:0 !important; width:100% !important; min-width:0 !important;
+    height:100% !important; max-height:100% !important; flex:none !important;
+    padding:10px 14px !important; overflow-y:auto !important; overflow-x:hidden !important;
+    background:rgba(242,248,253,.95) !important; border-right:1px solid #dae8f4 !important;
+    box-sizing:border-box !important; z-index:2 !important;
+  }
+  .shell.shell-home:has(.ref-dashboard) > aside .brand, .shell.shell-home:has(.ref-partner) > aside .brand {display:none !important}
+  .shell.shell-home:has(.ref-dashboard) > aside nav, .shell.shell-home:has(.ref-partner) > aside nav {gap:2px !important}
+  .shell.shell-home:has(.ref-dashboard) > aside nav button, .shell.shell-home:has(.ref-partner) > aside nav button,
+  .shell.shell-home:has(.ref-dashboard) > aside .sidebar-foot button, .shell.shell-home:has(.ref-partner) > aside .sidebar-foot button {
+    min-height:35px !important; height:clamp(35px,4.5dvh,44px) !important; max-height:44px !important;
+    padding:5px 9px !important; font-size:clamp(12px,.9vw,14px) !important;
+    font-weight:600 !important; gap:9px !important; border:0 !important; background:transparent !important;
+    box-shadow:none !important; color:#153767 !important;
+  }
+  .shell.shell-home:has(.ref-dashboard) > aside nav button svg, .shell.shell-home:has(.ref-partner) > aside nav button svg {width:20px !important;height:20px !important;flex:none !important;color:#163f83 !important}
+  .shell.shell-home:has(.ref-dashboard) > aside nav button.active, .shell.shell-home:has(.ref-partner) > aside nav button.active {background:#096cf1 !important;color:white !important;border-radius:7px !important}
+  .shell.shell-home:has(.ref-dashboard) > aside nav button.active svg, .shell.shell-home:has(.ref-partner) > aside nav button.active svg {color:white !important}
+  .shell.shell-home:has(.ref-dashboard) > main, .shell.shell-home:has(.ref-partner) > main {
+    grid-column:2 !important; grid-row:1 / 3 !important; height:100% !important; width:100% !important;
+    min-width:0 !important; min-height:0 !important; margin:0 !important;
+    padding:0 !important; position:relative !important; overflow-y:auto !important; overflow-x:hidden !important;
+    border:0 !important; border-radius:0 !important; background:transparent !important; box-shadow:none !important;
+    z-index:1 !important;
+  }
+  .shell.shell-home .ref-dashboard,.shell.shell-home .ref-partner {background:transparent !important;min-height:100% !important;position:relative !important;color:#0b2857 !important}
+  .shell.shell-home .ref-topbar,.shell.shell-home .ref-partner-top {
+    height:75px !important;min-height:75px !important; display:flex !important;
+    align-items:center !important; gap:13px !important; justify-content:flex-end !important;
+    padding:10px 22px !important; margin:0 !important; width:100% !important;
+    box-sizing:border-box !important; background:transparent !important; border:0 !important;box-shadow:none !important;
+    position:relative !important;z-index:3 !important;
+  }
+  .shell.shell-home .ref-topbrand {
+    position:fixed !important;top:24px !important;left:36px !important;margin:0 !important;
+    font-size:28px !important;color:#08275a !important;z-index:5 !important;letter-spacing:-.5px !important;
+  }
+  .shell.shell-home .ref-topbar select {margin-left:auto !important;flex:0 1 210px !important;max-width:210px !important}
+  .shell.shell-home .ref-search {flex:0 1 315px !important; max-width:315px !important; min-width:145px !important}
+  .shell.shell-home .ref-partner-top label {margin:0 auto 0 0 !important; display:flex !important;align-items:center !important;gap:6px !important}
+  .shell.shell-home .ref-partner-top label select {width:190px !important;max-width:190px !important}
+  .shell.shell-home .ref-partner-search {margin-left:auto !important;flex:0 1 320px !important;width:auto !important;min-width:170px !important}
+  .shell.shell-home .ref-person,.shell.shell-home .ref-partner-user {margin-left:0 !important;flex:0 0 auto !important;min-width:150px !important;max-width:230px !important;color:#092c5b !important;justify-content:flex-end !important;align-items:center !important;white-space:nowrap !important}
+  .shell.shell-home .ref-person small,.shell.shell-home .ref-partner-user small {color:#4a6790 !important}
+  .shell.shell-home .ref-bell {color:#12356b !important;flex:none !important}
+  .shell.shell-home .ref-content {
+    display:block !important; padding:0 16px 24px !important; background:transparent !important;
+    box-sizing:border-box !important;min-height:calc(100dvh - 75px) !important;
+  }
+  .shell.shell-home .ref-banner {
+    height:165px !important;min-height:165px !important;max-height:165px !important;
+    background:none !important;border:0 !important;box-shadow:none !important;
+    border-radius:0 !important;padding:14px 12px !important;box-sizing:border-box !important;
+  }
+  .shell.shell-home .ref-banner h1,.shell.shell-home .ref-partner-hero h1 {color:#082457 !important;text-shadow:none !important;font-size:clamp(25px,2.15vw,35px) !important;line-height:1.1 !important;margin:0 0 9px !important}
+  .shell.shell-home .ref-banner h3 {font-size:18px !important;color:#0d3268 !important;margin:0 0 9px !important}
+  .shell.shell-home .ref-banner p,.shell.shell-home .ref-partner-hero p {font-size:14px !important;max-width:480px !important;color:#436c9e !important;text-shadow:none !important;line-height:1.5 !important}
+  .shell.shell-home .ref-kpis {display:grid !important;grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:12px !important;margin:8px 0 17px !important}
+  .shell.shell-home .ref-kpis>div {min-height:clamp(105px,14dvh,140px) !important;padding:15px !important}
+  .shell.shell-home .ref-bottom {grid-template-columns:minmax(0,1.9fr) minmax(260px,.9fr) !important;gap:12px !important;min-height:calc(100dvh - 400px) !important}
+  .shell.shell-home .ref-bottom>.ref-panel {min-height:100% !important}
+  .shell.shell-home .ref-module-grid {grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:7px !important;height:calc(100% - 30px) !important;grid-auto-rows:minmax(110px,1fr) !important}
+  .shell.shell-home .ref-module-grid button {min-height:110px !important;padding:8px !important}
+  .shell.shell-home .ref-module-icon {width:48px !important;height:48px !important}
+  .shell.shell-home .ref-module-icon svg {height:27px !important;width:27px !important}
+  .shell.shell-home .ref-activity {min-height:100% !important}
+  /* Partner has the same full-width hero, with distinct content columns below. */
+  .shell.shell-home .ref-partner-main {display:grid !important;grid-template-columns:minmax(0,1fr) 230px !important;gap:12px !important;padding:0 16px 25px !important;margin:0 !important;background:transparent !important;align-items:start !important}
+  .shell.shell-home .ref-partner-left {display:block !important;min-width:0 !important;grid-column:1 !important;grid-row:1 !important}
+  .shell.shell-home .ref-partner-hero {height:165px !important;min-height:165px !important;max-height:165px !important;background:none !important;border:0 !important;border-radius:0 !important;box-shadow:none !important;margin:0 0 8px !important;padding:12px 12px 4px !important;box-sizing:border-box !important}
+  .shell.shell-home .ref-role-buttons {margin-top:10px !important;gap:7px !important;display:flex !important;flex-wrap:wrap !important}
+  .shell.shell-home .ref-role-buttons button {padding:6px 10px !important}
+  .shell.shell-home .ref-partner-stats {grid-template-columns:repeat(4,minmax(0,1fr)) !important;gap:7px !important;margin:0 0 12px !important}
+  .shell.shell-home .ref-partner-stats>div {min-height:115px !important;padding:11px 8px !important}
+  .shell.shell-home .ref-partner-data {grid-template-columns:repeat(2,minmax(0,1fr)) !important;gap:10px !important}
+  .shell.shell-home .ref-partner-data section {min-height:clamp(260px,40dvh,430px) !important}
+  .shell.shell-home .ref-partner-actions {grid-column:2 !important;grid-row:1 !important;align-self:stretch !important;position:relative !important;top:auto !important;right:auto !important;inset:auto !important;margin:173px 0 0 !important;width:100% !important;height:auto !important;max-height:none !important;padding:13px !important;display:block !important;box-sizing:border-box !important;background:white !important;border:1px solid #d5e5f5 !important;border-radius:10px !important;box-shadow:none !important}
+  .shell.shell-home .ref-partner-actions button {min-height:43px !important}
+  .shell.shell-home .ref-partner-notice {padding:8px 18px 20px !important}
+}
+@media (min-width:761px) and (max-width:1170px) {
+ .shell.shell-home:has(.ref-dashboard),.shell.shell-home:has(.ref-partner) {--sidebar-width:210px;--hero-height:220px}
+ .shell.shell-home .ref-topbrand{font-size:23px !important;left:20px !important}
+ .shell.shell-home .ref-partner-main{grid-template-columns:minmax(0,1fr) 205px !important}
+ .shell.shell-home .ref-partner-stats{grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+ .shell.shell-home .ref-partner-data{grid-template-columns:1fr !important}
+ .shell.shell-home .ref-module-grid{grid-template-columns:repeat(3,minmax(0,1fr)) !important}
+ .shell.shell-home .ref-bottom{grid-template-columns:1fr !important}
+}
+@media (max-width:760px) {
+ .shell.shell-home:has(.ref-dashboard),.shell.shell-home:has(.ref-partner){display:block !important;height:100dvh !important;overflow:auto !important;background:#eef6fc !important}
+ .shell.shell-home:has(.ref-dashboard)::before,.shell.shell-home:has(.ref-partner)::before{content:"" !important;display:block !important;position:absolute !important;inset:0 0 auto 0 !important;height:240px !important;background:linear-gradient(90deg,rgba(230,243,253,.96),rgba(230,243,253,.55)),url('/hero-plant.jpg') center/cover no-repeat !important;z-index:0 !important}
+ .shell.shell-home>main {background:transparent !important;position:relative !important;overflow:visible !important;height:auto !important}
+ .shell.shell-home .ref-topbar,.shell.shell-home .ref-partner-top{padding:8px 12px 8px 74px !important;background:transparent !important;flex-wrap:wrap !important;min-height:70px !important;height:auto !important}
+ .shell.shell-home .ref-banner,.shell.shell-home .ref-partner-hero{background:transparent !important;border:0 !important;box-shadow:none !important;max-height:none !important;height:auto !important;min-height:145px !important;padding:14px !important}
+ .shell.shell-home .ref-partner-main{display:block !important;padding:10px !important}
+ .shell.shell-home .ref-partner-left{display:block !important}
+ .shell.shell-home .ref-partner-actions{position:static !important;margin:12px 0 !important;display:block !important;width:100% !important}
+ .shell.shell-home .ref-partner-stats{grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+ .shell.shell-home .ref-partner-data{grid-template-columns:1fr !important}
+ .shell.shell-home .ref-module-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+ .shell.shell-home .ref-banner h1,.shell.shell-home .ref-partner-hero h1{color:#092a59 !important;text-shadow:none !important}
+ .shell.shell-home .ref-banner p,.shell.shell-home .ref-partner-hero p{color:#3f6290 !important;text-shadow:none !important}
+}
+/* Shared ZerroBuild wordmark on both workspaces; no duplicate in the content bar. */
+@media(min-width:761px){
+ .shell.shell-home:has(.ref-dashboard)::after,.shell.shell-home:has(.ref-partner)::after {
+   content:'◆ ZerroBuild' !important;display:block !important;position:absolute !important;
+   top:24px !important;left:36px !important;width:auto !important;height:auto !important;
+   z-index:10 !important;pointer-events:none !important;
+   font-family:Manrope,'Segoe UI',sans-serif !important;font-size:28px !important;font-weight:800 !important;
+   color:#0a2d63 !important;letter-spacing:-.5px !important;
+ }
+ .shell.shell-home .ref-topbrand{display:none !important;}
+}
+@media(min-width:761px) and (max-width:1170px){
+ .shell.shell-home:has(.ref-dashboard)::after,.shell.shell-home:has(.ref-partner)::after{left:20px !important;font-size:23px !important;}
+}

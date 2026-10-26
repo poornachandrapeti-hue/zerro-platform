@@ -1,0 +1,8 @@
+# Apply with: docker compose -f docker-compose.yml -f compose.staging.yaml ...
+services:
+  backend:
+    ports:
+      - "127.0.0.1:18000:8000"
+  frontend:
+    ports:
+      - "127.0.0.1:18080:80"

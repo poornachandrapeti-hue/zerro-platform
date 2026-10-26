@@ -1,0 +1,131 @@
+/* V9: One authoritative shared HOME layout. Replaces the conflicting V5-V8 home overrides. */
+@media(min-width:761px){
+ .shell.shell-home:has(.ref-dashboard),.shell.shell-home:has(.ref-partner){
+  --zb-hero:clamp(215px,26vh,245px);--zb-side:clamp(210px,14.55vw,240px);
+  display:grid!important;grid-template-columns:var(--zb-side) minmax(0,1fr)!important;
+  grid-template-rows:var(--zb-hero) minmax(0,1fr)!important;
+  height:100dvh!important;max-height:100dvh!important;width:100%!important;overflow:hidden!important;
+  position:relative!important;background:#eff7ff!important;isolation:isolate!important;
+ }
+ .shell.shell-home:has(.ref-dashboard)::before,.shell.shell-home:has(.ref-partner)::before{
+  content:''!important;display:block!important;position:absolute!important;inset:0 0 auto 0!important;
+  height:var(--zb-hero)!important;z-index:0!important;pointer-events:none!important;
+  background:linear-gradient(90deg,rgba(238,245,255,.76) 0%,rgba(239,246,255,.40) 27%,rgba(250,250,255,0) 65%),url('/zerrobuild-approved-daylight.jpg') center 70%/cover no-repeat!important;
+ }
+ .shell.shell-home:has(.ref-dashboard)::after,.shell.shell-home:has(.ref-partner)::after{
+  content:'◆ ZerroBuild'!important;display:block!important;position:absolute!important;top:23px!important;left:42px!important;
+  font:800 clamp(23px,2vw,31px)/1.1 Manrope,'Segoe UI',sans-serif!important;color:#081f56!important;z-index:8!important;
+  width:auto!important;height:auto!important;pointer-events:none!important;letter-spacing:-.7px!important;
+ }
+ .shell.shell-home:has(.ref-dashboard)>aside,.shell.shell-home:has(.ref-partner)>aside{
+  grid-area:2/1/3/2!important;position:relative!important;inset:auto!important;top:auto!important;left:auto!important;
+  width:100%!important;height:100%!important;max-height:100%!important;min-height:0!important;overflow-y:auto!important;overflow-x:hidden!important;
+  background:rgba(243,249,255,.97)!important;border:1px solid #daeafb!important;border-radius:0!important;
+  padding:10px 15px!important;margin:0!important;z-index:2!important;box-sizing:border-box!important;display:flex!important;flex-direction:column!important;
+ }
+ .shell.shell-home>aside .brand{display:none!important}
+ .shell.shell-home>aside nav{display:grid!important;gap:2px!important}
+ .shell.shell-home>aside nav button,.shell.shell-home>aside .sidebar-foot button{
+  height:clamp(35px,4.55vh,43px)!important;min-height:35px!important;max-height:43px!important;
+  padding:5px 9px!important;gap:12px!important;border:0!important;border-radius:7px!important;
+  background:transparent!important;color:#092b75!important;box-shadow:none!important;text-shadow:none!important;
+  font-size:clamp(12px,.88vw,15px)!important;font-weight:600!important;white-space:nowrap!important;
+ }
+ .shell.shell-home>aside nav button svg,.shell.shell-home>aside .sidebar-foot button svg{height:21px!important;width:21px!important;color:#092977!important;flex-shrink:0!important}
+ .shell.shell-home>aside nav button.active,.shell.shell-home>aside .sidebar-foot button.active{background:#0869ee!important;color:#fff!important}
+ .shell.shell-home>aside nav button.active svg,.shell.shell-home>aside .sidebar-foot button.active svg{color:#fff!important}
+ .shell.shell-home>aside nav button:hover:not(.active){background:#e2eefb!important}
+ .shell.shell-home>aside .sidebar-foot{margin-top:auto!important;padding-top:6px!important}
+ .shell.shell-home>main{
+  grid-area:1/2/3/3!important;min-height:0!important;height:100%!important;width:100%!important;min-width:0!important;
+  margin:0!important;padding:0!important;border:0!important;border-radius:0!important;overflow-y:auto!important;overflow-x:hidden!important;
+  background:transparent!important;box-shadow:none!important;position:relative!important;z-index:1!important;
+ }
+ .shell.shell-home .ref-dashboard,.shell.shell-home .ref-partner{background:transparent!important;color:#092659!important;height:auto!important;min-height:100%!important}
+ .shell.shell-home .ref-topbar,.shell.shell-home .ref-partner-top{
+  height:77px!important;min-height:77px!important;padding:12px 20px!important;display:flex!important;
+  justify-content:flex-end!important;align-items:center!important;gap:12px!important;flex-wrap:nowrap!important;
+  width:100%!important;box-sizing:border-box!important;background:transparent!important;border:0!important;box-shadow:none!important;
+ }
+ .shell.shell-home .ref-topbrand{display:none!important}
+ .shell.shell-home .ref-topbar select,.shell.shell-home .ref-partner-top label select{max-width:210px!important;width:clamp(135px,13vw,210px)!important;background:white!important;color:#0b295a!important}
+ .shell.shell-home .ref-topbar select{margin-left:auto!important}
+ .shell.shell-home .ref-partner-top label{margin-left:auto!important;margin-right:0!important;white-space:nowrap!important}
+ .shell.shell-home .ref-search,.shell.shell-home .ref-partner-search{
+  max-width:315px!important;width:clamp(160px,20vw,315px)!important;flex:0 1 315px!important;min-width:0!important;
+  margin:0!important;background:#fff!important;color:#6682ae!important;border:1px solid #dce8f6!important;
+ }
+ .shell.shell-home .ref-bell{flex:0 0 auto!important;color:#092659!important}
+ .shell.shell-home .ref-person,.shell.shell-home .ref-partner-user{
+  margin-left:6px!important;min-width:0!important;max-width:230px!important;flex:0 0 auto!important;
+  display:flex!important;justify-content:flex-end!important;align-items:center!important;color:#102b60!important;white-space:nowrap!important;
+ }
+ .shell.shell-home .ref-person small,.shell.shell-home .ref-partner-user small{color:#557299!important}
+ .shell.shell-home .ref-content{padding:0 16px 22px!important;min-height:0!important;background:transparent!important;display:block!important}
+ .shell.shell-home .ref-banner,.shell.shell-home .ref-partner-hero{
+  height:calc(var(--zb-hero) - 77px)!important;min-height:0!important;max-height:none!important;
+  padding:16px 10px!important;margin:0!important;background:transparent!important;border:0!important;border-radius:0!important;
+  box-shadow:none!important;overflow:visible!important;box-sizing:border-box!important;
+ }
+ .shell.shell-home .ref-banner h1,.shell.shell-home .ref-partner-hero h1{
+  color:#081e5a!important;text-shadow:none!important;font-size:clamp(24px,2.18vw,36px)!important;line-height:1.15!important;margin:0 0 9px!important;
+ }
+ .shell.shell-home .ref-banner h3{font-size:18px!important;margin:0 0 9px!important;color:#0b2861!important}
+ .shell.shell-home .ref-banner p,.shell.shell-home .ref-partner-hero p{font-size:clamp(12px,1vw,15px)!important;line-height:1.52!important;color:#446b9f!important;text-shadow:none!important;max-width:570px!important}
+ .shell.shell-home .ref-kpis,.shell.shell-home .ref-partner-stats{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:12px!important;margin:12px 0 18px!important}
+ .shell.shell-home .ref-kpis>div,.shell.shell-home .ref-partner-stats>div{
+  min-height:clamp(105px,13.5vh,140px)!important;background:#fff!important;border:1px solid #d7e8fa!important;
+  border-radius:9px!important;box-shadow:0 5px 17px rgba(15,68,120,.045)!important;padding:14px!important;
+ }
+ .shell.shell-home .ref-bottom{display:grid!important;grid-template-columns:minmax(0,2fr) minmax(300px,1fr)!important;gap:12px!important;min-height:clamp(400px,55vh,620px)!important}
+ .shell.shell-home .ref-panel{min-height:100%!important;background:white!important;border:1px solid #dceafb!important;border-radius:10px!important;padding:18px!important}
+ .shell.shell-home .ref-panel h2{font-size:20px!important;margin-bottom:12px!important}
+ .shell.shell-home .ref-module-grid{display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;grid-template-rows:repeat(3,minmax(120px,1fr))!important;gap:7px!important;height:calc(100% - 38px)!important}
+ .shell.shell-home .ref-module-grid button{min-height:120px!important;background:#f6faff!important;border:1px solid #d9e9fa!important;border-radius:8px!important;padding:8px!important}
+ .shell.shell-home .ref-module-grid strong{font-size:13px!important}
+ .shell.shell-home .ref-module-grid small{font-size:12px!important}
+ .shell.shell-home .ref-module-icon{width:51px!important;height:51px!important}.shell.shell-home .ref-module-icon svg{width:28px!important;height:28px!important}
+ /* Partner: full-width hero + four KPI cards + three evenly aligned lower panels */
+ .shell.shell-home .ref-partner-main{display:grid!important;grid-template-columns:minmax(0,1.32fr) minmax(0,1.18fr) minmax(245px,.98fr)!important;
+  grid-template-rows:calc(var(--zb-hero) - 77px) auto auto!important;gap:0 12px!important;padding:0 16px 20px!important;margin:0!important;align-items:stretch!important;background:transparent!important}
+ .shell.shell-home .ref-partner-left{display:contents!important}
+ .shell.shell-home .ref-partner-hero{grid-column:1/-1!important;grid-row:1!important}
+ .shell.shell-home .ref-role-buttons{display:flex!important;gap:9px!important;margin-top:10px!important;flex-wrap:wrap!important}
+ .shell.shell-home .ref-role-buttons button{padding:7px 13px!important}
+ .shell.shell-home .ref-partner-stats{grid-column:1/-1!important;grid-row:2!important;margin:12px 0 18px!important}
+ .shell.shell-home .ref-partner-data{grid-column:1/3!important;grid-row:3!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
+ .shell.shell-home .ref-partner-data section{min-height:clamp(340px,51vh,550px)!important;background:white!important;border:1px solid #dceafb!important;border-radius:9px!important;padding:18px!important}
+ .shell.shell-home .ref-partner-data h2,.shell.shell-home .ref-partner-actions h2{font-size:20px!important}
+ .shell.shell-home .ref-partner-actions{grid-column:3!important;grid-row:3!important;position:relative!important;inset:auto!important;top:auto!important;right:auto!important;
+  margin:0!important;width:100%!important;height:100%!important;max-height:none!important;min-height:0!important;align-self:stretch!important;
+  display:block!important;background:#fff!important;border:1px solid #dceafb!important;border-radius:9px!important;padding:18px!important;color:#0d3066!important}
+ .shell.shell-home .ref-partner-actions button{min-height:49px!important;background:#f8fbff!important;border:1px solid #dceafb!important;font-size:clamp(11px,.9vw,14px)!important}
+ .shell.shell-home .ref-partner-notice{padding:10px 20px 16px!important;font-size:11px!important}
+}
+@media(min-width:761px) and (max-width:1190px){
+ .shell.shell-home:has(.ref-dashboard),.shell.shell-home:has(.ref-partner){--zb-side:206px;--zb-hero:215px}
+ .shell.shell-home:has(.ref-dashboard)::after,.shell.shell-home:has(.ref-partner)::after{left:20px!important;font-size:23px!important}
+ .shell.shell-home .ref-bottom{grid-template-columns:1fr!important;min-height:0!important}
+ .shell.shell-home .ref-partner-main{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important}
+ .shell.shell-home .ref-partner-data{grid-column:1/-1!important;grid-row:3!important}
+ .shell.shell-home .ref-partner-actions{grid-column:1/-1!important;grid-row:4!important;margin-top:12px!important;height:auto!important}
+}
+@media(max-width:760px){
+ .shell.shell-home:has(.ref-dashboard),.shell.shell-home:has(.ref-partner){height:auto!important;min-height:100dvh!important;display:flex!important;flex-direction:column!important;overflow:visible!important;background:#eff7ff!important;position:relative!important}
+ .shell.shell-home:has(.ref-dashboard)::before,.shell.shell-home:has(.ref-partner)::before{content:''!important;display:block!important;position:absolute!important;inset:0 0 auto!important;height:260px!important;background:linear-gradient(90deg,rgba(238,245,255,.86),rgba(238,245,255,.14)),url('/zerrobuild-approved-daylight.jpg') center 70%/cover no-repeat!important;z-index:0!important}
+ .shell.shell-home:has(.ref-dashboard)::after,.shell.shell-home:has(.ref-partner)::after{content:'◆ ZerroBuild'!important;display:block!important;position:absolute!important;top:12px!important;left:74px!important;font-size:19px!important;font-weight:800!important;color:#0b2a5c!important;z-index:3!important}
+ .shell.shell-home>main{width:100%!important;margin:0!important;height:auto!important;overflow:visible!important;position:relative!important;background:transparent!important;min-height:0!important}
+ .shell.shell-home .ref-topbrand{display:none!important}
+ .shell.shell-home .ref-topbar,.shell.shell-home .ref-partner-top{height:auto!important;min-height:67px!important;padding:55px 12px 5px!important;flex-wrap:wrap!important;background:transparent!important;justify-content:flex-start!important}
+ .shell.shell-home .ref-banner,.shell.shell-home .ref-partner-hero{height:auto!important;min-height:128px!important;max-height:none!important;padding:14px!important;background:transparent!important;border:0!important;box-shadow:none!important}
+ .shell.shell-home .ref-banner h1,.shell.shell-home .ref-partner-hero h1{color:#0b2b60!important;text-shadow:none!important}
+ .shell.shell-home .ref-banner p,.shell.shell-home .ref-partner-hero p{color:#466a9a!important;text-shadow:none!important}
+ .shell.shell-home .ref-partner-main{display:flex!important;flex-direction:column!important;padding:0 10px 20px!important}
+ .shell.shell-home .ref-partner-left{display:contents!important}
+ .shell.shell-home .ref-partner-stats,.shell.shell-home .ref-kpis{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ .shell.shell-home .ref-partner-data,.shell.shell-home .ref-bottom{display:grid!important;grid-template-columns:1fr!important;gap:10px!important}
+ .shell.shell-home .ref-partner-actions{margin:12px 0 0!important;position:static!important;display:block!important;width:100%!important;height:auto!important}
+ .shell.shell-home .ref-module-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
+ .shell.shell-home .ref-content{padding:0 10px 16px!important}
+ .shell.shell-home>aside{z-index:10!important}
+}

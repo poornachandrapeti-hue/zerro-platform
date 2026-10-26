@@ -1,0 +1,37 @@
+export type Role = { label: string; role: string; discipline?: string };
+export type ProjectListItem = { id: number; code: string; name: string; client: string; location: string; status: string; overall_progress: number; planned_progress: number; planned_finish: string; forecast_finish: string };
+export type Contractor = { id: number; code: string; name: string; contact_name: string; phone: string };
+export type SubTask = {
+  id: number;
+  code: string;
+  name: string;
+  owner: string;
+  weight: number;
+  planned_progress: number;
+  actual_progress: number;
+  status: string;
+  start_date?: string | null;
+  target_date?: string | null;
+  notes?: string;
+};
+export type WorkPackage = {
+  id: number;
+  code: string;
+  name: string;
+  area: string;
+  weight: number;
+  planned_progress: number;
+  actual_progress: number;
+  budget: number;
+  committed_cost: number;
+  actual_cost: number;
+  start_date: string;
+  target_date: string;
+  status: string;
+  contractor: Contractor;
+  sub_tasks?: SubTask[];
+};
+export type Discipline = { id: number; code: string; name: string; weight: number; planned_progress: number; actual_progress: number; budget: number; target_date: string; work_packages: WorkPackage[] };
+export type Milestone = { id: number; name: string; discipline_code: string; planned_date: string; forecast_date: string; status: string };
+export type Risk = { id: number; title: string; discipline_code: string; severity: string; owner: string; due_date: string; mitigation: string; status: string };
+export type Dashboard = { id: number; code: string; name: string; client: string; location: string; status: string; start_date: string; planned_finish: string; forecast_finish: string; approved_budget: number; currency: string; overall_progress: number; planned_progress: number; budget_committed: number; actual_cost: number; disciplines: Discipline[]; milestones: Milestone[]; risks: Risk[] };

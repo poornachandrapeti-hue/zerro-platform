@@ -1,0 +1,34 @@
+{
+  "blocking_checks": [
+    "source_tests",
+    "frontend_build",
+    "postgres_migrations",
+    "docker_services",
+    "feed_smoke",
+    "command_backend_route",
+    "viewer_rbac",
+    "tenant_isolation",
+    "project_mapping",
+    "qa_authority",
+    "finance_authority",
+    "recovery_and_observability"
+  ],
+  "checkpoint": 12,
+  "note": "Eligibility is not production approval; authorized owners must review evidence.",
+  "phase": "Stores Phase 8",
+  "signoff": "blocked",
+  "statuses": {
+    "command_backend_route": "unverified",
+    "docker_services": "unverified",
+    "feed_smoke": "unverified",
+    "finance_authority": "unverified",
+    "frontend_build": "unverified",
+    "postgres_migrations": "unverified",
+    "project_mapping": "unverified",
+    "qa_authority": "unverified",
+    "recovery_and_observability": "unverified",
+    "source_tests": "unverified",
+    "tenant_isolation": "unverified",
+    "viewer_rbac": "unverified"
+  }
+}

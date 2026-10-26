@@ -1,0 +1,16 @@
+{
+  "gate": "STORES_PHASE4",
+  "outcome": "BLOCKED",
+  "returncode": 0,
+  "test_counts": {
+    "tests": 198,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 15
+  },
+  "postgres_test_url_configured": false,
+  "runtime_seconds": 19.89,
+  "reason": "No PostgreSQL test URL configured",
+  "live_inventory_writer_cutover_enabled": false,
+  "note": "Passing this test suite alone does not certify live Docker, frontend or separate Command Center integration."
+}

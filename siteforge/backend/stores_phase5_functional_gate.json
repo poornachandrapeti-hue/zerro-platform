@@ -1,0 +1,92 @@
+{
+  "as_of_utc": "2026-10-23T13:47:28.406146+00:00",
+  "scope": "static source contracts only",
+  "checks": {
+    "issue_handover": {
+      "present": true,
+      "source": "material_handovers.py",
+      "path": "/material-handovers"
+    },
+    "contractor_ack": {
+      "present": true,
+      "source": "material_handovers.py",
+      "path": "/material-handovers/{handover_id}/acknowledge"
+    },
+    "discrepancy_review": {
+      "present": true,
+      "source": "material_handovers.py",
+      "path": "/material-handovers/{handover_id}/resolve"
+    },
+    "return_request": {
+      "present": true,
+      "source": "material_returns.py",
+      "path": "/material-returns"
+    },
+    "return_receipt": {
+      "present": true,
+      "source": "material_returns.py",
+      "path": "/material-returns/{return_id}/receive"
+    },
+    "return_qa": {
+      "present": true,
+      "source": "material_returns.py",
+      "path": "/material-returns/{return_id}/qa-disposition"
+    },
+    "return_placement": {
+      "present": true,
+      "source": "material_returns.py",
+      "path": "/material-returns/{return_id}/placement"
+    },
+    "return_posting_gated": {
+      "present": true,
+      "source": "material_returns.py",
+      "path": "/material-returns/{return_id}/post-stock"
+    },
+    "return_exception": {
+      "present": true,
+      "source": "material_returns.py",
+      "path": "/material-returns/exception-monitor"
+    },
+    "construction_usage": {
+      "present": true,
+      "source": "construction_material_usage.py",
+      "path": "/phase5/material-usages"
+    },
+    "independent_qa_usage": {
+      "present": true,
+      "source": "construction_material_usage.py",
+      "path": "/phase5/material-usages/{usage_id}/verify"
+    },
+    "qa_usage_queue": {
+      "present": true,
+      "source": "construction_material_usage.py",
+      "path": "/phase5/material-usages/qa-queue"
+    },
+    "construction_manager_balance": {
+      "present": true,
+      "source": "phase5_material_balance.py",
+      "path": "/phase5/construction-manager-material-balance"
+    },
+    "mounted_stores_material_handovers_router": {
+      "present": true
+    },
+    "mounted_stores_material_returns_router": {
+      "present": true
+    },
+    "mounted_stores_construction_material_usage_router": {
+      "present": true
+    },
+    "mounted_stores_phase5_material_balance_router": {
+      "present": true
+    },
+    "return_post_gate_remains": {
+      "present": true
+    }
+  },
+  "passed": 18,
+  "total": 18,
+  "live_db_validated": false,
+  "frontend_built": false,
+  "command_center_runtime_connected": false,
+  "release_ready": false
+}

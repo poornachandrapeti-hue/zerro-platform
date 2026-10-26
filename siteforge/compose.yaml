@@ -1,0 +1,68 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: siteforge
+      POSTGRES_USER: siteforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+    ports:
+      - "0.0.0.0:${DB_HOST_PORT:-55432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siteforge -d siteforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+  migrate:
+    build: ./backend
+    environment: &backend_env
+      DATABASE_URL: postgresql+psycopg://siteforge:${POSTGRES_PASSWORD}@db:5432/siteforge
+      ALLOWED_ORIGINS: ${ALLOWED_ORIGINS:-http://localhost:5173}
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      SESSION_HOURS: ${SESSION_HOURS:-12}
+      COMMAND_CENTER_SSO_SECRET: ${COMMAND_CENTER_SSO_SECRET:-}
+      FILE_ROOT: /data/files
+      EMAIL_ENABLED: "false"
+      OCR_PROVIDER: ${OCR_PROVIDER:-}
+      OCR_ENDPOINT: ${OCR_ENDPOINT:-}
+      OCR_API_KEY: ${OCR_API_KEY:-}
+      OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-90}
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      db:
+        condition: service_healthy
+  backend:
+    build: ./backend
+    environment: *backend_env
+    volumes:
+      - siteforge_files:/data/files
+    ports:
+      - "0.0.0.0:${API_HOST_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://0.0.0.0:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  frontend:
+    build: ./frontend
+    ports:
+      - "0.0.0.0:${WEB_HOST_PORT:-5173}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+  worker:
+    build: ./backend
+    environment: *backend_env
+    command: ["python", "-m", "app.domains.coordination.jobs"]
+    volumes:
+      - siteforge_files:/data/files
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+volumes:
+  postgres_data:
+  siteforge_files:

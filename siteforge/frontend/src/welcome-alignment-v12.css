@@ -1,0 +1,60 @@
+/* V12: hero copy starts at page left; partner role selection is below hero. */
+@media(min-width:761px){
+ .shell.shell-home:has(.ref-dashboard) .ref-banner,
+ .shell.shell-home:has(.ref-partner) .ref-partner-hero{
+  position:relative!important;
+  left:calc(-1 * var(--zb-side))!important;
+  width:calc(100% + var(--zb-side))!important;
+  padding-left:clamp(30px,2.7vw,48px)!important;
+  padding-right:26px!important;
+  box-sizing:border-box!important;
+  overflow:visible!important;
+  z-index:1!important;
+ }
+ .shell.shell-home:has(.ref-dashboard) .ref-banner h1,
+ .shell.shell-home:has(.ref-dashboard) .ref-banner h3,
+ .shell.shell-home:has(.ref-dashboard) .ref-banner p,
+ .shell.shell-home:has(.ref-partner) .ref-partner-hero h1,
+ .shell.shell-home:has(.ref-partner) .ref-partner-hero p{
+  text-align:left!important;margin-left:0!important;transform:none!important;
+  max-width:min(680px,65vw)!important;
+ }
+ .shell.shell-home:has(.ref-partner) .ref-partner-main{
+  grid-template-rows:calc(var(--zb-hero) - 74px) auto auto minmax(340px,1fr)!important;
+ }
+ .shell.shell-home:has(.ref-partner) .ref-partner-role-row{
+  grid-column:1/-1!important;grid-row:2!important;
+  position:relative!important;z-index:2!important;
+  min-height:64px!important;display:flex!important;align-items:center!important;
+  padding:10px 3px 9px!important;
+  margin:0!important;background:transparent!important;
+ }
+ .shell.shell-home:has(.ref-partner) .ref-partner-role-row .ref-role-buttons{
+  display:flex!important;position:static!important;flex-wrap:wrap!important;
+  align-items:center!important;gap:10px!important;margin:0!important;
+ }
+ .shell.shell-home:has(.ref-partner) .ref-partner-role-row button{
+  height:40px!important;min-height:40px!important;padding:8px 17px!important;
+  border-radius:9px!important;white-space:nowrap!important;
+ }
+ .shell.shell-home:has(.ref-partner) .ref-partner-stats{grid-row:3!important;}
+ .shell.shell-home:has(.ref-partner) .ref-partner-data,
+ .shell.shell-home:has(.ref-partner) .ref-partner-actions{grid-row:4!important;}
+}
+@media(min-width:761px) and (max-width:1250px){
+ .shell.shell-home:has(.ref-partner) .ref-partner-main{
+  grid-template-rows:calc(var(--zb-hero) - 74px) auto auto auto auto!important;
+ }
+ .shell.shell-home:has(.ref-partner) .ref-partner-data{grid-row:4!important;}
+ .shell.shell-home:has(.ref-partner) .ref-partner-actions{grid-row:5!important;}
+}
+@media(max-width:760px){
+ .shell.shell-home .ref-banner,.shell.shell-home .ref-partner-hero{
+  padding-left:18px!important;text-align:left!important;
+ }
+ .shell.shell-home .ref-partner-role-row{order:1!important;display:block!important;margin:10px 0 12px!important;}
+ .shell.shell-home .ref-partner-role-row .ref-role-buttons{display:flex!important;gap:8px!important;flex-wrap:wrap!important;margin:0!important;}
+ .shell.shell-home .ref-partner-stats{order:2!important;}
+ .shell.shell-home .ref-partner-data{order:3!important;}
+ .shell.shell-home .ref-partner-actions{order:4!important;}
+}

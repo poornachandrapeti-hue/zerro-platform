@@ -1,0 +1,22 @@
+import {useEffect,useState,type FormEvent} from 'react';
+import {api} from '../api';
+
+type Project={project_id:number;code:string;name:string};
+type Handover={id:number;handover_reference:string;quantity:string;received_quantity:string|null;damaged_quantity:string|null;status:string;version:number;discrepancy_note:string;resolution_note:string};
+export function PartnerMaterialHandovers({initialProjectId}:{initialProjectId:number|null}){
+ const [projects,setProjects]=useState<Project[]>([]),[pid,setPid]=useState<number|null>(null),[rows,setRows]=useState<Handover[]>([]);
+ const [editing,setEditing]=useState<Handover|null>(null),[received,setReceived]=useState(''),[damaged,setDamaged]=useState('0'),[note,setNote]=useState(''),[evidence,setEvidence]=useState('');
+ const [error,setError]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
+ useEffect(()=>{void api<{items:Project[]}>('/partner/projects').then(x=>{setProjects(x.items);setPid(x.items.find(p=>p.project_id===initialProjectId)?.project_id??x.items[0]?.project_id??null)}).catch(e=>setError((e as Error).message))},[initialProjectId]);
+ async function refresh(project:number){setError('');try{const data=await api<{records:Handover[]}>(`/partner/projects/${project}/stores/material-handovers`);setRows(data.records)}catch(e){setRows([]);setError((e as Error).message)}}
+ useEffect(()=>{setRows([]);setEditing(null);if(pid)void refresh(pid)},[pid]);
+ async function acknowledge(event:FormEvent){event.preventDefault();if(!pid||!editing||busy)return;setBusy(true);setError('');setMessage('');try{await api(`/partner/projects/${pid}/stores/material-handovers/${editing.id}/acknowledge`,'POST',{version:editing.version,received_quantity:received,damaged_quantity:damaged,evidence,discrepancy_note:note});setMessage('Receipt recorded. Any shortage or damage is pending independent Stores review; this does not change physical inventory.');setEditing(null);await refresh(pid)}catch(e){setError((e as Error).message)}finally{setBusy(false)}}
+ return <section className="panel"><h2>My Material Handovers</h2><p className="muted">Acknowledge dispatched materials for your own requests. Report shortages and damaged quantities with supporting evidence. This is not a stock adjustment or proof of installation.</p>
+ {projects.length>1&&<label>Project <select value={pid??''} onChange={e=>setPid(Number(e.target.value))}>{projects.map(p=><option key={p.project_id} value={p.project_id}>{p.code} — {p.name}</option>)}</select></label>}
+ {error&&<p className="error" role="alert">{error}</p>}{message&&<p role="status">{message}</p>}
+ <button type="button" onClick={()=>pid&&void refresh(pid)}>Refresh handovers</button>
+ <div className="mp-table-wrap"><table className="mp-table"><thead><tr><th>Handover</th><th>Dispatched</th><th>Received</th><th>Damaged</th><th>Status</th><th>Action</th></tr></thead><tbody>{rows.map(r=><tr key={r.id}><td>{r.handover_reference}</td><td>{r.quantity}</td><td>{r.received_quantity??'—'}</td><td>{r.damaged_quantity??'—'}</td><td>{r.status}{r.discrepancy_note&&<small> · {r.discrepancy_note}</small>}{r.resolution_note&&<small> · Stores review: {r.resolution_note}</small>}</td><td>{r.status==='Awaiting Acknowledgment'&&<button type="button" onClick={()=>{setEditing(r);setReceived(r.quantity);setDamaged('0');setEvidence('');setNote('')}}>Acknowledge</button>}</td></tr>)}</tbody></table></div>
+ {rows.length===0&&<p className="muted">No issue handovers assigned to your requests.</p>}
+ {editing&&<form onSubmit={acknowledge} style={{display:'grid',gap:10,maxWidth:630,marginTop:16}}><h3>Acknowledge {editing.handover_reference}</h3><label>Received quantity <input type="number" min="0" max={editing.quantity} step="0.001" value={received} onChange={e=>setReceived(e.target.value)} required/></label><label>Damaged quantity (included in received) <input type="number" min="0" max={received} step="0.001" value={damaged} onChange={e=>setDamaged(e.target.value)} required/></label><label>Shortage/damage explanation <textarea maxLength={4000} value={note} onChange={e=>setNote(e.target.value)}/></label><label>Receipt evidence/reference <textarea required minLength={3} maxLength={4000} value={evidence} onChange={e=>setEvidence(e.target.value)}/></label><div><button className="btn" disabled={busy} type="submit">{busy?'Submitting...':'Submit receipt acknowledgment'}</button> <button type="button" onClick={()=>setEditing(null)}>Cancel</button></div></form>}
+ </section>
+}

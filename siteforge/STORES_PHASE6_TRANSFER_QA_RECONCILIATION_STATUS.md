@@ -1,0 +1,7 @@
+# Phase 6: Transfer Posting Reconciliation and Destination QA Hold
+
+Implemented a read-only GET `/api/projects/{pid}/stores/material-transfers/{transfer_id}/ledger-reconciliation` validating transfer-pair posting identity, source/destination warehouse and project, material/unit/quantity, line linkage, destination-lot provenance and ledger status. Responses explicitly mark `available_for_issue=false` and `physical_stock_readiness=Unverified`.
+
+Added POST `/api/projects/{pid}/stores/material-transfers/{transfer_id}/destination-qa-hold` for **independent QA** to quarantine or reject a posted destination lot, after successful reconciliation; authenticated `quality.edit`, independent-of-creator/dispatcher/receiver check and audit in same transaction. Accepted/cleared is deliberately NOT supported: existing downstream lot reservation and issue writers do not yet handle transfer-derived QA attribution and stock quarantine isolation. Do not treat aggregate destination `on_hand` as QA-cleared stock.
+
+No inventory posting features have been activated. Same-project transfer physical posting still requires runtime feature flags, source/destination reconciliation, full PostgreSQL integration validation and reconciliation coverage updates. Inter-project stock posting is blocked. Previous Phase 4/5 validation remains deferred per user instruction. No live database or Docker deployment tested.

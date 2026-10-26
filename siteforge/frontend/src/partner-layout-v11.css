@@ -1,0 +1,67 @@
+/* V11 Partner layout: definitive last-loaded partner-only rules.
+   Internal workspace and login are unaffected. */
+@media (min-width:761px) {
+ .shell.shell-home:has(.ref-partner){
+   --zb-side:clamp(204px,14.4vw,236px);
+   --zb-hero:clamp(224px,25.5vh,250px);
+   display:grid!important;grid-template-columns:var(--zb-side) minmax(0,1fr)!important;
+   grid-template-rows:var(--zb-hero) minmax(0,1fr)!important;
+   background:#eef6fd!important;overflow:hidden!important;height:100dvh!important;
+ }
+ .shell.shell-home:has(.ref-partner)::before{height:var(--zb-hero)!important;background:linear-gradient(90deg,rgba(238,245,255,.70),rgba(238,245,255,.30) 40%,transparent 80%),url('/zerrobuild-approved-daylight.jpg') center 72%/cover no-repeat!important}
+ .shell.shell-home:has(.ref-partner)>aside{grid-row:2!important;grid-column:1!important;min-height:0!important;overflow-y:auto!important}
+ .shell.shell-home:has(.ref-partner)>main{grid-row:1/3!important;grid-column:2!important;min-width:0!important;overflow-y:auto!important;overflow-x:hidden!important}
+ .shell.shell-home .ref-partner{display:flex!important;flex-direction:column!important;min-width:0!important;min-height:100%!important}
+ .shell.shell-home .ref-partner-top{height:74px!important;min-height:74px!important;display:flex!important;align-items:center!important;justify-content:flex-end!important;gap:14px!important;padding:12px 20px!important;white-space:nowrap!important;min-width:0!important;box-sizing:border-box!important;position:relative!important;z-index:3!important}
+ .shell.shell-home .ref-partner-top>label{display:flex!important;align-items:center!important;gap:5px!important;min-width:0!important;margin-left:auto!important;margin-right:0!important}
+ .shell.shell-home .ref-partner-top select{width:clamp(140px,13vw,210px)!important;min-width:0!important;max-width:210px!important}
+ .shell.shell-home .ref-partner-search{flex:0 1 315px!important;width:clamp(155px,22vw,315px)!important;min-width:0!important;max-width:315px!important;margin:0!important;overflow:hidden!important}
+ .shell.shell-home .ref-partner-user{margin-left:8px!important;display:flex!important;align-items:center!important;justify-content:flex-end!important;min-width:160px!important;max-width:220px!important;flex-shrink:0!important;position:relative!important;z-index:4!important}
+ .shell.shell-home .ref-partner-main{
+  display:grid!important;grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(240px,.83fr)!important;
+  grid-template-rows:calc(var(--zb-hero) - 74px) auto minmax(340px,1fr)!important;
+  column-gap:12px!important;row-gap:0!important;align-items:stretch!important;
+  padding:0 16px 18px!important;margin:0!important;min-width:0!important;background:none!important;
+ }
+ .shell.shell-home .ref-partner-left{display:contents!important}
+ .shell.shell-home .ref-partner-hero{
+  grid-column:1/-1!important;grid-row:1!important;position:relative!important;
+  width:auto!important;min-width:0!important;max-width:none!important;
+  height:auto!important;min-height:0!important;max-height:none!important;
+  padding:16px 8px 12px!important;margin:0!important;overflow:visible!important;
+  background:transparent!important;border:none!important;box-shadow:none!important;
+ }
+ .shell.shell-home .ref-partner-hero h1{font-size:clamp(27px,2.25vw,36px)!important;line-height:1.12!important;margin:0 0 11px!important;color:#0c275a!important;max-width:95%!important}
+ .shell.shell-home .ref-partner-hero p{max-width:560px!important;color:#4b6f9a!important;font-size:clamp(12px,.92vw,15px)!important;margin:0!important;line-height:1.4!important}
+ .shell.shell-home .ref-role-buttons{display:flex!important;align-items:center!important;gap:9px!important;flex-wrap:wrap!important;margin-top:13px!important;position:relative!important;z-index:2!important}
+ .shell.shell-home .ref-role-buttons button{height:38px!important;min-height:38px!important;max-height:38px!important;padding:8px 14px!important;white-space:nowrap!important}
+ .shell.shell-home .ref-partner-stats{grid-row:2!important;grid-column:1/-1!important;display:grid!important;grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:12px!important;margin:12px 0 18px!important;min-width:0!important}
+ .shell.shell-home .ref-partner-stats>div{min-width:0!important;min-height:110px!important;padding:13px!important}
+ .shell.shell-home .ref-partner-data{grid-row:3!important;grid-column:1/3!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important;min-width:0!important;min-height:0!important}
+ .shell.shell-home .ref-partner-data section{min-width:0!important;min-height:clamp(340px,51vh,550px)!important;padding:18px!important;overflow:hidden!important}
+ .shell.shell-home .ref-partner-actions{
+  grid-row:3!important;grid-column:3!important;position:static!important;
+  display:block!important;top:auto!important;left:auto!important;right:auto!important;bottom:auto!important;
+  margin:0!important;min-width:0!important;max-width:none!important;width:100%!important;height:auto!important;
+  min-height:0!important;padding:17px!important;align-self:stretch!important;box-sizing:border-box!important;
+  overflow:visible!important;transform:none!important;
+ }
+ .shell.shell-home .ref-partner-actions button{min-height:42px!important;margin-bottom:6px!important;padding:9px 10px!important}
+ .shell.shell-home .ref-partner-notice{padding:6px 17px 16px!important}
+}
+@media (min-width:761px) and (max-width:1250px){
+ .shell.shell-home .ref-partner-main{grid-template-columns:minmax(0,1fr) minmax(0,1fr)!important;grid-template-rows:calc(var(--zb-hero) - 74px) auto auto auto!important}
+ .shell.shell-home .ref-partner-data{grid-column:1/-1!important;grid-row:3!important}
+ .shell.shell-home .ref-partner-actions{grid-column:1/-1!important;grid-row:4!important;margin-top:12px!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:7px!important}
+ .shell.shell-home .ref-partner-actions h2,.shell.shell-home .ref-partner-actions .ref-partner-help{grid-column:1/-1!important}
+}
+@media(max-width:760px){
+ .shell.shell-home .ref-partner-top{align-items:center!important;justify-content:flex-start!important;gap:8px!important}
+ .shell.shell-home .ref-partner-main{display:flex!important;flex-direction:column!important;padding:0 12px 20px!important}
+ .shell.shell-home .ref-partner-left{display:contents!important}
+ .shell.shell-home .ref-partner-hero{order:0!important;min-height:140px!important;padding:12px!important;overflow:visible!important}
+ .shell.shell-home .ref-role-buttons{display:flex!important;flex-wrap:wrap!important;gap:6px!important}
+ .shell.shell-home .ref-partner-stats{order:1!important;display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:8px!important}
+ .shell.shell-home .ref-partner-data{order:2!important;display:grid!important;grid-template-columns:1fr!important;gap:10px!important}
+ .shell.shell-home .ref-partner-actions{order:3!important;position:static!important;margin:12px 0 0!important;transform:none!important;width:100%!important}
+}

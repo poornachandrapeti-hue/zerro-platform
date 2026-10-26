@@ -1,0 +1,18 @@
+ZerroBuild Integrated UI — Phase 2 (source package)
+
+Included: original ZerroBuild source and updated login/workspace selection, internal dashboard from Phase 1, partner homepage with role-view tabs and real /notifications feed.
+
+Changed paths:
+frontend/src/App.tsx
+frontend/src/style.css
+frontend/src/partner/PartnerHome.tsx
+
+Usage: unzip; cd siteforge/frontend; npm ci; npm run build; npm run dev. Backend must be running/configured as in original project.
+
+Security and completion warning:
+- Partner Portal is a PREVIEW for existing authenticated users, not a production external partner login or a new grant of permissions. Role tabs are UI filters only.
+- Dedicated external company isolation, transaction-level partner APIs, downstream revision impact engine, full traceability explorer, contract lifecycle and certified billing/payment implementation are NOT included.
+- Existing server RBAC and notification endpoints were not modified.
+- Notification activity uses GET /notifications; project membership list uses existing API.
+- npm dependencies were unavailable/incomplete in this sandbox, and npm ci timed out. Compile and regression testing has not passed here.
+- Before letting vendors sign in, add external partner entitlements and independent server-side filtering with security tests.
