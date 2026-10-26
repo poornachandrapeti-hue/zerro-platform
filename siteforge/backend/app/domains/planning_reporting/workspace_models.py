@@ -454,3 +454,41 @@ class PartnerPlanningCommitment(Base):
     reviewed_by = Column(Integer, nullable=True)
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
     review_note = Column(Text, nullable=False, default='')
+
+
+class PlanningEquipmentComplianceEvidence(Base):
+    """Evidence review for calibration, certification and inspection; not a statutory authority."""
+    __tablename__ = 'planning_equipment_compliance_evidence'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_compliance_request'),)
+    id=Column(Integer,primary_key=True)
+    organization_id=Column(Integer,nullable=False,index=True)
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=False,index=True)
+    asset_id=Column(Integer,ForeignKey('planning_equipment_assets.id'),nullable=False,index=True)
+    request_key=Column(String(100),nullable=False)
+    kind=Column(String(24),nullable=False)
+    evidence_ref=Column(String(240),nullable=False)
+    valid_through=Column(Date,nullable=False)
+    required=Column(Boolean,nullable=False,default=True)
+    status=Column(String(20),nullable=False,default='Pending')
+    created_by=Column(Integer,nullable=False)
+    reviewed_by=Column(Integer,nullable=True)
+    created_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
+    reviewed_at=Column(DateTime(timezone=True),nullable=True)
+
+class PlanningEquipmentSafetyHold(Base):
+    """Independent HSE operational restriction, not an asset deletion or stock movement."""
+    __tablename__ = 'planning_equipment_safety_holds'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_safety_hold_request'),)
+    id=Column(Integer,primary_key=True)
+    organization_id=Column(Integer,nullable=False,index=True)
+    project_id=Column(Integer,ForeignKey('projects.id'),nullable=False,index=True)
+    asset_id=Column(Integer,ForeignKey('planning_equipment_assets.id'),nullable=False,index=True)
+    request_key=Column(String(100),nullable=False)
+    reason=Column(Text,nullable=False)
+    evidence_ref=Column(String(240),nullable=False)
+    status=Column(String(20),nullable=False,default='Active')
+    created_by=Column(Integer,nullable=False)
+    created_at=Column(DateTime(timezone=True),nullable=False,default=utcnow)
+    released_by=Column(Integer,nullable=True)
+    release_evidence_ref=Column(String(240),nullable=True)
+    released_at=Column(DateTime(timezone=True),nullable=True)

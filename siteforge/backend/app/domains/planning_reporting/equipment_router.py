@@ -86,6 +86,7 @@ def update_master(pid:int,asset_id:int,body:MasterUpdate,user:User=Depends(authe
     changes=body.model_dump(exclude={'reason'})
     validate_master_transition(a,changes,db,user.organization_id)
     if changes.get('operating_condition') == 'Serviceable':
+        _check_equipment_compliance(db,a,user.organization_id,date.today())
         from .workspace_models import PlanningEquipmentMaintenanceOrder
         from .equipment_maintenance_rules import OPEN_STATES
         open_orders=db.query(PlanningEquipmentMaintenanceOrder).filter_by(
@@ -173,6 +174,7 @@ def confirm_equipment(pid:int,allocation_id:int,body:Decision,user:User=Depends(
     if not a.resource_ref.startswith('equipment:') or not a.resource_ref.split(':',1)[1].isdigit():raise HTTPException(422,'Registered equipment reference required')
     asset=db.query(PlanningEquipmentAsset).filter_by(id=int(a.resource_ref.split(':')[1]),organization_id=user.organization_id).one_or_none()
     if not asset:raise HTTPException(422,'Equipment identity not found')
+    _check_equipment_compliance(db, asset, user.organization_id, a.ends_at.astimezone(timezone.utc).date())
     if asset.inspection_review_status != 'Verified':raise HTTPException(409,'Independently reviewed inspection evidence required')
     if asset.inspection_reviewed_by==user.id:raise HTTPException(403,'Inspector reviewer cannot confirm own equipment reservation')
     if a.created_by==user.id or a.reviewed_by==user.id or asset.created_by==user.id:raise HTTPException(403,'Independent equipment confirmation required')
@@ -249,6 +251,7 @@ def issue_custody(pid:int,asset_id:int,body:CustodyIssueInput,user:User=Depends(
     if body.allocation_id is not None:
         allocation=db.query(PlanningResourceAllocation).filter_by(id=body.allocation_id,organization_id=user.organization_id,project_id=pid).one_or_none()
         if allocation is None:raise HTTPException(409,'Planning allocation not found')
+    _check_equipment_compliance(db, asset, user.organization_id, date.today())
     validate_issue(asset,body.quantity,allocation)
     if allocation is not None and allocation.status!='EquipmentConfirmed':
         raise HTTPException(409,'Equipment allocation not confirmed')
@@ -359,3 +362,100 @@ def maintenance_history(pid:int,asset_id:int,user:User=Depends(authenticated),db
     orders=db.query(PlanningEquipmentMaintenanceOrder).filter_by(asset_id=asset_id,organization_id=user.organization_id,project_id=pid).order_by(PlanningEquipmentMaintenanceOrder.id).all()
     return {'items':[{'id':o.id,'kind':o.kind,'status':o.status,'due_on':o.due_on,'title':o.title,
                       'created_by':o.created_by,'released_by':o.released_by} for o in orders]}
+
+
+# E5: compliance records keep the same project/organization equipment scope.
+def _check_equipment_compliance(db, asset, org_id, through_date):
+    from .workspace_models import PlanningEquipmentComplianceEvidence, PlanningEquipmentSafetyHold
+    from .equipment_compliance_rules import ensure_compliant
+    certs=db.query(PlanningEquipmentComplianceEvidence).filter_by(organization_id=org_id,asset_id=asset.id).all()
+    holds=db.query(PlanningEquipmentSafetyHold).filter_by(organization_id=org_id,asset_id=asset.id).all()
+    return ensure_compliant(asset,certs,holds,through_date)
+
+class ComplianceSubmission(BaseModel):
+    request_key:str=Field(min_length=8,max_length=100)
+    kind:str=Field(pattern='^(Calibration|Certification|Inspection)$')
+    evidence_ref:str=Field(min_length=3,max_length=240)
+    valid_through:date
+    required:bool=True
+
+class ComplianceReview(BaseModel):
+    decision:str=Field(pattern='^(Verified|Rejected)$')
+
+class SafetyHoldInput(BaseModel):
+    request_key:str=Field(min_length=8,max_length=100)
+    reason:str=Field(min_length=5,max_length=1000)
+    evidence_ref:str=Field(min_length=3,max_length=240)
+
+class SafetyReleaseInput(BaseModel):
+    evidence_ref:str=Field(min_length=3,max_length=240)
+
+@router.post('/equipment-assets/{asset_id}/compliance',status_code=201)
+def submit_compliance(pid:int,asset_id:int,body:ComplianceSubmission,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    equipment_access(db,user,pid)
+    from .workspace_models import PlanningEquipmentComplianceEvidence as Evidence
+    asset=db.query(PlanningEquipmentAsset).filter_by(id=asset_id,organization_id=user.organization_id,project_id=pid).one_or_none()
+    if not asset:raise HTTPException(404,'Project equipment not found')
+    if db.query(Evidence).filter_by(organization_id=user.organization_id,request_key=body.request_key).first():
+        raise HTTPException(409,'Compliance request key already used')
+    row=Evidence(organization_id=user.organization_id,project_id=pid,asset_id=asset_id,
+        request_key=body.request_key,kind=body.kind,evidence_ref=body.evidence_ref,
+        valid_through=body.valid_through,required=body.required,status='Pending',created_by=user.id)
+    db.add(row);db.commit();db.refresh(row)
+    return {'id':row.id,'status':row.status,'basis':'Unverified compliance evidence'}
+
+@router.post('/equipment-assets/{asset_id}/compliance/{evidence_id}/review')
+def review_compliance(pid:int,asset_id:int,evidence_id:int,body:ComplianceReview,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    equipment_access(db,user,pid)
+    from .workspace_models import PlanningEquipmentComplianceEvidence as Evidence
+    from .equipment_compliance_rules import review_allowed
+    row=db.query(Evidence).filter_by(id=evidence_id,organization_id=user.organization_id,project_id=pid,asset_id=asset_id).with_for_update().one_or_none()
+    if not row:raise HTTPException(404,'Compliance evidence not found')
+    review_allowed(row,user.id,body.decision)
+    row.status=body.decision;row.reviewed_by=user.id;row.reviewed_at=datetime.now(timezone.utc)
+    db.commit()
+    return {'id':row.id,'status':row.status,'reviewed_by':row.reviewed_by}
+
+@router.post('/equipment-assets/{asset_id}/safety-holds',status_code=201)
+def create_safety_hold(pid:int,asset_id:int,body:SafetyHoldInput,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    equipment_access(db,user,pid)
+    from .workspace_models import PlanningEquipmentSafetyHold as Hold
+    asset=db.query(PlanningEquipmentAsset).filter_by(id=asset_id,organization_id=user.organization_id,project_id=pid).with_for_update().one_or_none()
+    if not asset:raise HTTPException(404,'Project equipment not found')
+    if db.query(Hold).filter_by(organization_id=user.organization_id,request_key=body.request_key).first():
+        raise HTTPException(409,'Safety hold request key already used')
+    row=Hold(organization_id=user.organization_id,project_id=pid,asset_id=asset_id,request_key=body.request_key,
+        reason=body.reason,evidence_ref=body.evidence_ref,status='Active',created_by=user.id)
+    db.add(row);db.commit();db.refresh(row)
+    return {'id':row.id,'status':'Active','basis':'Equipment safety restriction'}
+
+@router.post('/equipment-assets/{asset_id}/safety-holds/{hold_id}/release')
+def release_safety_hold(pid:int,asset_id:int,hold_id:int,body:SafetyReleaseInput,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    equipment_access(db,user,pid)
+    from .workspace_models import PlanningEquipmentSafetyHold as Hold
+    from .equipment_compliance_rules import release_allowed
+    row=db.query(Hold).filter_by(id=hold_id,organization_id=user.organization_id,project_id=pid,asset_id=asset_id).with_for_update().one_or_none()
+    if not row:raise HTTPException(404,'Safety hold not found')
+    release_allowed(row,user.id,body.evidence_ref)
+    row.status='Released';row.released_by=user.id;row.release_evidence_ref=body.evidence_ref
+    row.released_at=datetime.now(timezone.utc)
+    db.commit()
+    return {'id':row.id,'status':row.status,'note':'Hold release does not override inspection or maintenance requirements'}
+
+@router.get('/equipment-assets/{asset_id}/compliance-status')
+def compliance_status(pid:int,asset_id:int,user:User=Depends(authenticated),db:Session=Depends(get_db)):
+    access(db,user,pid,True)
+    from .workspace_models import PlanningEquipmentComplianceEvidence as Evidence, PlanningEquipmentSafetyHold as Hold
+    from .equipment_compliance_rules import ensure_compliant
+    asset=db.query(PlanningEquipmentAsset).filter_by(id=asset_id,organization_id=user.organization_id,project_id=pid).one_or_none()
+    if not asset:raise HTTPException(404,'Project equipment not found')
+    certs=db.query(Evidence).filter_by(organization_id=user.organization_id,asset_id=asset_id).all()
+    holds=db.query(Hold).filter_by(organization_id=user.organization_id,asset_id=asset_id).all()
+    try:
+        ensure_compliant(asset,certs,holds,date.today());eligible=True;reason=None
+    except HTTPException as exc:
+        eligible=False;reason=exc.detail
+    return {'asset_id':asset_id,'compliance_eligible':eligible,'reason':reason,
+        'evidence':[{'id':c.id,'kind':c.kind,'status':c.status,'required':c.required,'valid_through':c.valid_through,'evidence_ref':c.evidence_ref} for c in certs],
+        'holds':[{'id':h.id,'status':h.status,'reason':h.reason} for h in holds],
+        'basis':'Internal evidence workflow; not statutory certification verification'}
