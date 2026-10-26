@@ -368,6 +368,61 @@ class PlanningEquipmentMasterChange(Base):
     after_state=Column(JSON,nullable=False)
 
 
+class PlanningEquipmentCustodyMovement(Base):
+    """E3 append-only operational custody events; never a Stores stock ledger."""
+    __tablename__ = 'planning_equipment_custody_movements'
+    __table_args__ = (UniqueConstraint('organization_id','request_key',name='uq_equipment_custody_request'),)
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False, index=True)
+    asset_id = Column(Integer, ForeignKey('planning_equipment_assets.id'), nullable=False, index=True)
+    allocation_id = Column(Integer, ForeignKey('planning_resource_allocations.id'), nullable=True)
+    parent_issue_id = Column(Integer, ForeignKey('planning_equipment_custody_movements.id'), nullable=True)
+    action = Column(String(20), nullable=False)
+    quantity = Column(Integer, nullable=False)
+    custodian_user_id = Column(Integer, nullable=False)
+    location = Column(String(200), nullable=False)
+    reason = Column(Text, nullable=False)
+    evidence_ref = Column(String(240), nullable=False)
+    request_key = Column(String(100), nullable=False)
+    recorded_by = Column(Integer, nullable=False)
+    recorded_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class PlanningEquipmentMaintenanceOrder(Base):
+    """One maintenance lifecycle per individual asset; no Stores or Finance ledger."""
+    __tablename__ = 'planning_equipment_maintenance_orders'
+    __table_args__ = (UniqueConstraint('organization_id', 'request_key', name='uq_equipment_maintenance_request'),)
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey('projects.id'), nullable=False, index=True)
+    asset_id = Column(Integer, ForeignKey('planning_equipment_assets.id'), nullable=False, index=True)
+    request_key = Column(String(100), nullable=False)
+    kind = Column(String(20), nullable=False)
+    status = Column(String(24), nullable=False, default='Reported')
+    title = Column(String(200), nullable=False)
+    reported_reason = Column(Text, nullable=False)
+    due_on = Column(Date, nullable=True)
+    created_by = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    repair_completed_by = Column(Integer, nullable=True)
+    repair_evidence_ref = Column(String(240), nullable=True)
+    released_by = Column(Integer, nullable=True)
+    released_at = Column(DateTime(timezone=True), nullable=True)
+
+class PlanningEquipmentMaintenanceEvent(Base):
+    """Append-only E4 transition evidence and reviewer trace."""
+    __tablename__ = 'planning_equipment_maintenance_events'
+    id = Column(Integer, primary_key=True)
+    organization_id = Column(Integer, nullable=False, index=True)
+    order_id = Column(Integer, ForeignKey('planning_equipment_maintenance_orders.id'), nullable=False, index=True)
+    old_status = Column(String(24), nullable=True)
+    new_status = Column(String(24), nullable=False)
+    evidence_ref = Column(String(240), nullable=False)
+    actor_id = Column(Integer, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class PlanningEquipmentInspectionDecision(Base):
     __tablename__='planning_equipment_inspection_decisions'
     id=Column(Integer,primary_key=True)
