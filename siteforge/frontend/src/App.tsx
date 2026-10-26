@@ -46,6 +46,7 @@ import {
 import { DrawingsHome, EngineeringBoard } from "./engineering";
 import { ProcurementHome } from "./procurement";
 import { StoresHome } from "./stores";
+import { EquipmentHome } from "./equipment";
 import { PlanningHome } from "./planning";
 import { FinancialsHome } from "./financials";
 import { ContractsHome, PartnerContracts } from "./contracts";
@@ -422,6 +423,7 @@ export default function App() {
   const canPlanning = admin || session.memberships.some((item) => item.permissions?.includes("planning.view") || item.permissions?.includes("planning.manage"));
   const canProcurement =
     admin || session.memberships.some((item) => item.permissions?.includes("procurement.view"));
+  const canEquipment = canPlanning;
   const canStores = admin || session.memberships.some(item => item.permissions?.includes("procurement.master.edit") || item.permissions?.includes("procurement.stock.edit"));
   const canConstruction =
     admin || session.memberships.some((item) => item.permissions?.includes("construction.view"));
@@ -467,7 +469,7 @@ export default function App() {
   const entries: [string, string, LucideIcon][] = workspace === "partner" ? [
     ["partner", "Home", Home], ["soon:My Profile", "My Profile", Users], ["procurement", "RFQs & Tenders", ShoppingCart], ["soon:Quotations", "Quotations", FileText], ["partner-pos", "Purchase Orders", ShoppingCart], ["partner-planning", "Planning", CalendarDays], ["partner-contracts", "My Contracts", ScrollText], ["partner-deliveries", "Deliveries", Truck], ["partner-material-requests", "Material Requests", ListChecks], ["partner-material-handovers", "Material Receipts", Truck], ["partner-material-returns", "Material Returns", Truck], ["drawings", "Documents", FileText], ["soon:Invoices & Payments", "Invoices & Payments", Wallet], ["quality", "Quality & Inspections", ShieldCheck], ["construction", "Work Progress", HardHat], ["notifications", "Messages", Bell], ["help", "Support", HelpCircle], ["switch-workspace", "Switch workspace", Users],
   ] : [
-    ["home", "Home", Home], ["projects", "Project Details", Building2], ["drawings", "Engineering", FileText], ["procurement", "Procurement", ShoppingCart], ["construction", "Construction", HardHat], ["quality", "Quality", ShieldCheck], ["safety", "Safety", AlertTriangle], ["planning", "Planning", CalendarDays], ["progress", "Progress", ChartNoAxesCombined], ["financials", "Financials", Wallet], ["contracts", "Contracts", ScrollText], ["manpower", "HR & Manpower", Users], ["stores", "Store & Inventory", Warehouse], ["soon:Equipment & Tools", "Equipment & Tools", Wrench], ["soon:Commissioning & Handover", "Commissioning & Handover", ClipboardCheck], ["notifications", "Reports & Analytics", Bell], ["settings", "Administration", Settings], ["switch-workspace", "Switch workspace", Building2],
+    ["home", "Home", Home], ["projects", "Project Details", Building2], ["drawings", "Engineering", FileText], ["procurement", "Procurement", ShoppingCart], ["construction", "Construction", HardHat], ["quality", "Quality", ShieldCheck], ["safety", "Safety", AlertTriangle], ["planning", "Planning", CalendarDays], ["progress", "Progress", ChartNoAxesCombined], ["financials", "Financials", Wallet], ["contracts", "Contracts", ScrollText], ["manpower", "HR & Manpower", Users], ["stores", "Store & Inventory", Warehouse], ["equipment", "Equipment & Tools", Wrench], ["soon:Commissioning & Handover", "Commissioning & Handover", ClipboardCheck], ["notifications", "Reports & Analytics", Bell], ["settings", "Administration", Settings], ["switch-workspace", "Switch workspace", Building2],
   ];
   return (
     <div className={`shell${nav === "home" || nav === "favorites" || nav === "partner" ? " shell-home" : ""}${navOpen ? " nav-open" : ""}`}>
@@ -507,7 +509,9 @@ export default function App() {
                                     ? "HR & Workforce"
                                     : nav === "manpower"
                                       ? "Manpower"
-                                      : nav === "planning" || nav === "partner-planning"
+                                      : nav === "equipment"
+                        ? "Equipment & Tools"
+                      : nav === "planning" || nav === "partner-planning"
                                         ? "Planning"
                                       : nav === "progress"
                                         ? "Progress"
@@ -603,6 +607,8 @@ export default function App() {
                 <StoresHome session={session} initialProjectId={homeProject} />
               ) : nav === "requests" && canProcurement ? (
                 <RequirementsHome session={session} initialProjectId={homeProject} />
+              ) : nav === "equipment" && workspace === "internal" && canEquipment ? (
+                <EquipmentHome session={session} initialProjectId={homeProject} />
               ) : nav === "planning" && workspace === "internal" && canPlanning ? (
                 <PlanningHome session={session} initialProjectId={homeProject} />
               ) : nav === "progress" && workspace === "internal" && canPlanning ? (
