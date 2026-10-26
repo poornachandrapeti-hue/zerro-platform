@@ -34,12 +34,12 @@ export function EquipmentOperations({ project, tab, assets }: { project: number;
     setBusy(true);
     const prefix = `/projects/${project}/planning`;
     const requests: Array<Promise<[keyof Result, unknown]>> = tab === "Allocations"
-      ? [["allocations", api<ApiRows<Allocation>>(`${prefix}/allocations?schedule_id=${Number(scheduleId)}`)]].map(async ([key, p]) => [key, await p])
+      ? [["allocations", api<ApiRows<Allocation>>(`${prefix}/allocations?schedule_id=${Number(scheduleId)}`)]].map(async ([key, p]): Promise<[keyof Result, unknown]> => [key as keyof Result, await p])
       : tab === "Availability"
-        ? [["compliance", api<Compliance>(`${prefix}/equipment-assets/${assetId}/compliance-status`)]].map(async ([key, p]) => [key, await p])
+        ? [["compliance", api<Compliance>(`${prefix}/equipment-assets/${assetId}/compliance-status`)]].map(async ([key, p]): Promise<[keyof Result, unknown]> => [key as keyof Result, await p])
         : tab === "Custody"
-          ? [["custody", api<Result["custody"]>(`${prefix}/equipment-assets/${assetId}/custody`)]].map(async ([key, p]) => [key, await p])
-          : [["usage", api<ApiRows<Usage>>(`${prefix}/equipment-assets/${assetId}/usage`)]].map(async ([key, p]) => [key, await p]);
+          ? [["custody", api<Result["custody"]>(`${prefix}/equipment-assets/${assetId}/custody`)]].map(async ([key, p]): Promise<[keyof Result, unknown]> => [key as keyof Result, await p])
+          : [["usage", api<ApiRows<Usage>>(`${prefix}/equipment-assets/${assetId}/usage`)]].map(async ([key, p]): Promise<[keyof Result, unknown]> => [key as keyof Result, await p]);
     Promise.all(requests).then(pairs => { if (alive) setResult(Object.fromEntries(pairs) as Result); })
       .catch(e => { if (alive) setError(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (alive) setBusy(false); });
