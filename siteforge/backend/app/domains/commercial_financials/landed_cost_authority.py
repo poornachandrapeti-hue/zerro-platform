@@ -158,6 +158,8 @@ def receipt_cost_preview(pid:int,user:User=Depends(authenticated),db:Session=Dep
                                               Decimal(str(po_line.unit_price)),b.currency))
         groups[b.currency].append((b,receipts))
     output=[]
+    batch_evidence=[]
+    line_allocations=[]
     for currency,entries in groups.items():
         # Each batch allocates *only* to the receipt lines explicitly named on that batch.
         per_line=defaultdict(lambda:{'purchase_cost':None,'landed_cost':Decimal('0.00'), 'references':[]})
@@ -170,7 +172,10 @@ def receipt_cost_preview(pid:int,user:User=Depends(authenticated),db:Session=Dep
                     organization_id=org,project_id=pid,currency=currency,as_of=as_of)
             except (ValueError,ArithmeticError,ZeroDivisionError) as exc:
                 raise HTTPException(409,f'Cannot allocate batch {b.id}: {exc}') from exc
+            batch_evidence.append({'batch_id':b.id,'currency':currency,'amount':str(b.amount),'independently_approved':True})
             for r in preview['receipt_lines']:
+                line_allocations.append({'batch_id':b.id,'receipt_line_id':r['receipt_line_id'],
+                                         'amount':r['allocated_landed_charge'],'currency':currency})
                 slot=per_line[r['receipt_line_id']]
                 base=Decimal(r['purchase_cost'])
                 if slot['purchase_cost'] is not None and slot['purchase_cost']!=base:
@@ -184,7 +189,18 @@ def receipt_cost_preview(pid:int,user:User=Depends(authenticated),db:Session=Dep
                       'indicative_total':str(row['purchase_cost']+row['landed_cost']),
                       'batch_ids':row['references']}
                       for line_id,row in sorted(per_line.items()))
+    # Preserve individual Finance batch references. A single synthetic batch ID
+    # erases provenance and prevents detecting repeated/reconciled charges.
+    from .phase9_landed_cost_reconciliation import reconcile_landed_cost_batches
+    for currency in groups:
+        evidence=[b for b in batch_evidence if b['currency']==currency]
+        allocations=[a for a in line_allocations if a['currency']==currency]
+        try:
+            reconcile_landed_cost_batches(batches=evidence,allocations=allocations,
+                receipt_line_ids=sorted({a['receipt_line_id'] for a in allocations}),currency=currency)
+        except ValueError as exc:
+            raise HTTPException(409, f'Landed batch reconciliation failed: {exc}') from exc
     return {'status':'INDICATIVE_UNPOSTED_PREVIEW','read_only':True,
-            'receipt_lines':output,'finance_source_verified':False,
+            'batch_allocations':line_allocations,'receipt_lines':output,'finance_source_verified':False,
             'movement_valuation_verified':False,'journal_posting_verified':False,
             'warning':'PO unit prices are not Finance-verified invoice/landed receipt costs. No actual inventory valuation or journal posting has been established.'}
