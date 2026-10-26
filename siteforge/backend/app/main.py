@@ -119,6 +119,8 @@ app.include_router(planning_equipment_router)
 # Equipment E7B2 authority verification
 from .domains.planning_reporting.equipment_e7_authority_api import router as equipment_authority_router
 app.include_router(equipment_authority_router)
+from .domains.planning_reporting.equipment_e7_handoff_api import router as equipment_handoff_router
+app.include_router(equipment_handoff_router)
 
 # Phase 29: isolated company-scoped Planning partner API
 from .domains.planning_reporting.partner_router import router as partner_planning_router
