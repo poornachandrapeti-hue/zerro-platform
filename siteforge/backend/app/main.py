@@ -293,3 +293,5 @@ app.include_router(movement_receipt_api_router)
 
 from .domains.commercial_financials.movement_journal_proposals import router as movement_journal_proposals_router
 app.include_router(movement_journal_proposals_router)
+from .domains.commercial_financials.phase9_command_center_feed import router as phase9_finance_feed_router
+app.include_router(phase9_finance_feed_router)

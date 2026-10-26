@@ -35,6 +35,8 @@ app.add_middleware(
 )
 app.include_router(projects_router)
 app.include_router(stores_exceptions_router)
+from .routers.phase9_finance import router as phase9_finance_router
+app.include_router(phase9_finance_router)
 
 
 @app.get("/health")

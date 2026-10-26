@@ -3,15 +3,21 @@ from app.domains.commercial_financials.gl_batch_reconciliation import reconcile_
 
 
 def example(n):
-    payload = dict(organization_id=1,project_id=2,proposal_id=n,proposal_revision=1,
-        source_movement_line_id=n,currency='INR',balanced_total='125.00')
-    h = {'posting_status':'NOT_POSTED','idempotency_key':f'finance-proposal:1:2:{n}:1',
-         'payload_sha256':f'sha{n}','journal_proposal':payload}
-    r = {**payload,'idempotency_key':h['idempotency_key'],
-         'payload_sha256':h['payload_sha256'],'status':'POSTED',
-         'posted_at':'2026-10-26T08:00:00Z','posted_by':10,
-         'external_journal_id':f'GL-{n}','total_debit':'125.00','total_credit':'125.00'}
-    return h,r
+    import hashlib
+    import json
+    from tests.test_phase9_handoff_integrity import handoff
+    h = handoff()
+    payload = h['journal_proposal']
+    payload['proposal_id'] = n
+    payload['source_movement_line_id'] = n
+    h['idempotency_key'] = f'finance-proposal:1:2:{n}:1'
+    h['payload_sha256'] = hashlib.sha256(json.dumps(payload, sort_keys=True,
+        separators=(',', ':'), ensure_ascii=True).encode()).hexdigest()
+    r = {**payload, 'idempotency_key': h['idempotency_key'],
+         'payload_sha256': h['payload_sha256'], 'status': 'POSTED',
+         'posted_at': '2026-10-26T08:00:00Z', 'posted_by': 10,
+         'external_journal_id': f'GL-{n}', 'total_debit': '125.00', 'total_credit': '125.00'}
+    return h, r
 
 class Adapter:
     def __init__(self, receipts): self.receipts=receipts; self.calls=[]

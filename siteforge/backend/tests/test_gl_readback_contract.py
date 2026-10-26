@@ -2,14 +2,14 @@ from app.domains.commercial_financials.gl_readback_contract import inspect_finan
 
 
 def sample():
-    payload = dict(organization_id=1,project_id=2,proposal_id=3,proposal_revision=1,
-                   source_movement_line_id=4,currency='INR',balanced_total='125.00')
-    h = {'posting_status':'NOT_POSTED','idempotency_key':'finance-proposal:1:2:3:1',
-         'payload_sha256':'sha', 'journal_proposal':payload}
-    r = {**payload,'idempotency_key':h['idempotency_key'], 'payload_sha256':'sha',
-         'status':'POSTED','posted_at':'2026-10-26T08:00:00Z','posted_by':10,
-         'external_journal_id':'GL-1','total_debit':'125.00','total_credit':'125.00'}
-    return h,r
+    from tests.test_phase9_handoff_integrity import handoff
+    h = handoff()
+    payload = h['journal_proposal']
+    r = {**payload, 'idempotency_key': h['idempotency_key'],
+         'payload_sha256': h['payload_sha256'], 'status': 'POSTED',
+         'posted_at': '2026-10-26T08:00:00Z', 'posted_by': 10,
+         'external_journal_id': 'GL-1', 'total_debit': '125.00', 'total_credit': '125.00'}
+    return h, r
 
 class Adapter:
     def __init__(self, receipts):self.receipts=receipts;self.calls=[]

@@ -159,15 +159,16 @@ def consolidated_receipt_preview(pid:int,user:User=Depends(authenticated),db:Ses
                         'quantity':a.quantity,'unit_cost':a.unit_cost,'currency':a.currency,
                         'independently_approved':True})
     preview=landed_preview(pid=pid,user=user,db=db)
+    # Carry actual approved batch IDs, not a synthetic ID 0, so downstream
+    # reconciliation can detect duplicated or missing Finance charge provenance.
     landed=[]
-    for line in preview.get('receipt_lines',[]):
-        rid=line['receipt_line_id']
-        if rid in receipt_ids:
-            # The already checked landed-cost preview aggregates only approved batches.
-            # Keep a single aggregated reference, preserving contributing batch IDs in metadata.
-            landed.append({'receipt_line_id':rid,'batch_id':0,
-                           'amount':line['approved_landed_charge_total'],
-                           'currency':line['currency'],'independently_approved':True})
+    for allocation in preview.get('batch_allocations',[]):
+        if allocation['receipt_line_id'] in receipt_ids:
+            landed.append({'receipt_line_id':allocation['receipt_line_id'],
+                           'batch_id':allocation['batch_id'],
+                           'amount':allocation['amount'],
+                           'currency':allocation['currency'],
+                           'independently_approved':True})
     try:result=consolidate_receipt_layers(receipts=receipts,invoice_allocations=invoice,landed_allocations=landed)
     except (ValueError,ArithmeticError,TypeError) as exc:
         raise HTTPException(409,f'Receipt cost evidence inconsistent: {exc}') from exc

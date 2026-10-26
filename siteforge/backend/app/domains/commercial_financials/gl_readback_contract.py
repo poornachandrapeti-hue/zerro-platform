@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Protocol, Mapping, Any
 from .gl_receipt_verification import verify_gl_receipt
+from .phase9_handoff_integrity import validate_approved_handoff
 
 
 class FinanceLedgerReadback(Protocol):
@@ -40,6 +41,9 @@ def inspect_finance_ledger_readback(handoff: dict, adapter: FinanceLedgerReadbac
             raise ValueError()
     except (KeyError, ValueError, TypeError):
         return {**blocked, 'reasons': ['invalid_scope']}
+    integrity_errors = validate_approved_handoff(handoff)
+    if integrity_errors:
+        return {**blocked, 'reasons': integrity_errors}
     if adapter is None:
         return {**blocked, 'reasons': ['finance_ledger_adapter_not_configured']}
     try:
