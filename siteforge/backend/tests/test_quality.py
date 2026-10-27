@@ -1187,6 +1187,8 @@ def test_material_inspection_splits_a_receipt_without_accepting_installation(env
     )
     assert too_much.status_code == 422, too_much.text
     assert "quality has accepted" in too_much.text
+    # A Quality-module approval alone does not authorize the independent
+    # Stores QA case. Fail closed rather than bypassing QA revocation controls.
     stocked = c.post(
         f"/api/projects/{pid}/procurement/stock/acceptances",
         json={
@@ -1196,19 +1198,11 @@ def test_material_inspection_splits_a_receipt_without_accepting_installation(env
             "lines": [{"goods_receipt_line_id": line_id, "quantity": "7"}],
         },
     )
-    assert stocked.status_code == 201, stocked.text
-    over_issue = c.post(
-        f"/api/projects/{pid}/procurement/stock/issues",
-        json={
-            "number": "ISS-MAT",
-            "warehouse_id": warehouse.json()["id"],
-            "reason": "Site issue",
-            "recipient": "Civil crew",
-            "lines": [{"item_id": item_id, "quantity": "8"}],
-        },
-    )
-    assert over_issue.status_code == 422, over_issue.text
-    issued = c.post(
+    assert stocked.status_code == 422, stocked.text
+    assert "quality has accepted" in stocked.text
+
+    # With no QA-authorized stock posting, item-level issues must also fail.
+    blocked_issue = c.post(
         f"/api/projects/{pid}/procurement/stock/issues",
         json={
             "number": "ISS-MAT",
@@ -1218,7 +1212,8 @@ def test_material_inspection_splits_a_receipt_without_accepting_installation(env
             "lines": [{"item_id": item_id, "quantity": "7"}],
         },
     )
-    assert issued.status_code == 201, issued.text
+    assert blocked_issue.status_code == 409, blocked_issue.text
+    assert "QA-certified stock source is unavailable" in blocked_issue.text
     with maker() as db:
         from app.domains.quality.models import QualityOffer
 
