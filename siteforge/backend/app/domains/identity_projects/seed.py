@@ -81,7 +81,7 @@ ROLE_NAMES = [
 
 def default_permissions(name):
     if name in GRANTS:
-        extras = {"Project Manager": ["stores.requests.view", "stores.requests.review"]}
+        extras = {"Project Manager": ["stores.requests.view", "stores.requests.review","stores.quality_handoff.approve"]}
         return list(dict.fromkeys([*GRANTS[name], *extras.get(name, [])]))
     permissions = ["projects.view"]
     if name == "Finance Officer":
@@ -128,7 +128,7 @@ def default_permissions(name):
     elif name == "HSE":
         permissions += ["hse.view", "hse.plan"]
     elif name == "QA/QC":
-        permissions += ["procurement.view", "quality.view", "quality.plan", "hse.view"]
+        permissions += ["procurement.view", "quality.view", "quality.plan", "hse.view","stores.quality_handoff.approve"]
     elif name == "Procurement Officer":
         permissions += ["procurement.view", "procurement.requisition.edit", "procurement.rfq.edit", "procurement.po.edit", "procurement.receipt.edit", "procurement.invoice.edit", "quality.view"]
     elif name == "Procurement Manager":

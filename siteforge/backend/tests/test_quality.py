@@ -1214,6 +1214,94 @@ def test_material_inspection_splits_a_receipt_without_accepting_installation(env
     )
     assert blocked_issue.status_code == 409, blocked_issue.text
     assert "QA-certified stock source is unavailable" in blocked_issue.text
+
+    # Real API handoff: approved Quality dispositions authorize an untouched
+    # Stores inspection case, but never post stock or release mixed lots.
+    handoff_url = (
+        f"/api/projects/{pid}/stores/inspection-cases/"
+        f"from-quality/{line_id}/reconcile"
+    )
+    transferred = c.post(handoff_url, params={"expected_version": 1})
+    assert transferred.status_code == 200, transferred.text
+    snapshot = transferred.json()
+    assert Decimal(snapshot["accepted_qty"]) == Decimal("7")
+    assert Decimal(snapshot["rejected_qty"]) == Decimal("3")
+    assert Decimal(snapshot["quarantined_qty"]) == Decimal("0")
+    assert Decimal(snapshot["pending_qty"]) == Decimal("0")
+    assert snapshot["stock_posted"] is False
+    assert snapshot["lot_release_enabled"] is False
+
+    # Repeating with a stale expected version must not double-authorize QA.
+    replay = c.post(handoff_url, params={"expected_version": 1})
+    assert replay.status_code == 409, replay.text
+
+    # Exercise access control through real HTTP requests (not source-text checks).
+    sign_in(c, "viewer@alpha.test")
+    forbidden = c.post(handoff_url, params={"expected_version": 2})
+    assert forbidden.status_code == 403, forbidden.text
+
+    sign_in(c, "admin@beta.test")
+    cross_tenant = c.post(handoff_url, params={"expected_version": 2})
+    assert cross_tenant.status_code in (403, 404), cross_tenant.text
+
+    sign_in(c)
+    wrong_project = c.post(
+        f"/api/projects/{pid + 100000}/stores/inspection-cases/"
+        f"from-quality/{line_id}/reconcile",
+        params={"expected_version": 2},
+    )
+    assert wrong_project.status_code in (403, 404), wrong_project.text
+
+    # A current version must still reject handoff over recorded Stores decisions.
+    decided = c.post(handoff_url, params={"expected_version": 2})
+    assert decided.status_code == 409, decided.text
+    assert "Existing Stores decisions" in decided.text
+
+    from app.domains.stores_inventory.models import StoresInspectionCase, StoresInspectionDecision
+    with maker() as db:
+        case = db.query(StoresInspectionCase).filter_by(goods_receipt_line_id=line_id).one()
+        decisions = db.query(StoresInspectionDecision).filter_by(case_id=case.id).all()
+        assert len(decisions) == 2
+        assert Decimal(case.accepted_qty) == Decimal("7")
+        assert Decimal(case.rejected_qty) == Decimal("3")
+
+    # Posting beyond Quality acceptance remains forbidden after the handoff.
+    still_too_much = c.post(
+        f"/api/projects/{pid}/procurement/stock/acceptances",
+        json={
+            "number": "ACC-MAT-OVER",
+            "warehouse_id": warehouse.json()["id"],
+            "goods_receipt_id": receipt_id,
+            "lines": [{"goods_receipt_line_id": line_id, "quantity": "8"}],
+        },
+    )
+    assert still_too_much.status_code == 422, still_too_much.text
+
+    authorized_stock = c.post(
+        f"/api/projects/{pid}/procurement/stock/acceptances",
+        json={
+            "number": "ACC-MAT",
+            "warehouse_id": warehouse.json()["id"],
+            "goods_receipt_id": receipt_id,
+            "lines": [{"goods_receipt_line_id": line_id, "quantity": "7"}],
+        },
+    )
+    assert authorized_stock.status_code == 201, authorized_stock.text
+
+    # The coarse item ledger still contains a partly rejected GRN; issuing
+    # from an unsegregated item balance must remain blocked.
+    mixed_issue = c.post(
+        f"/api/projects/{pid}/procurement/stock/issues",
+        json={
+            "number": "ISS-MAT",
+            "warehouse_id": warehouse.json()["id"],
+            "reason": "Site issue",
+            "recipient": "Civil crew",
+            "lines": [{"item_id": item_id, "quantity": "7"}],
+        },
+    )
+    assert mixed_issue.status_code == 409, mixed_issue.text
+    assert "partial inspection" in mixed_issue.text
     with maker() as db:
         from app.domains.quality.models import QualityOffer
 

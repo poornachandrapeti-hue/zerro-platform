@@ -791,3 +791,90 @@ def reassign_receipt_lot_reservation(pid: int, data: LotReservationReassignIn,
         action_key=data.action_key, reason=data.reason)
     commit(db)
     return result
+
+
+@router.post("/inspection-cases/from-quality/{receipt_line_id}/reconcile")
+def reconcile_approved_quality_case(
+    pid: int,
+    receipt_line_id: int,
+    expected_version: int = 1,
+    u: User = Depends(authenticated),
+    db: Session = Depends(get_db),
+):
+    """One-time, explicit QA handoff. Never releases, posts, or issues inventory.
+
+    Fail closed for revoked/previously decided cases. Subsequent Quality changes
+    require a separately reviewed reinspection workflow, not silent overwrite.
+    """
+    project = qa_access(db, u, pid, edit=False)
+    permitted(db, u, project, "stores.quality_handoff.approve")
+    from app.domains.quality.material import _totals
+    from app.domains.quality.models import MaterialInspection
+
+    line = (db.query(GoodsReceiptLine)
+        .join(GoodsReceipt, GoodsReceipt.id == GoodsReceiptLine.goods_receipt_id)
+        .filter(GoodsReceiptLine.id == receipt_line_id,
+                GoodsReceipt.project_id == pid,
+                GoodsReceipt.organization_id == u.organization_id,
+                GoodsReceipt.status == "Posted")
+        .with_for_update().first())
+    if line is None:
+        raise HTTPException(404, "Posted goods receipt line not found")
+    case = (db.query(StoresInspectionCase)
+        .filter_by(goods_receipt_line_id=receipt_line_id,
+                   project_id=pid, organization_id=u.organization_id)
+        .with_for_update().first())
+    if case and case.status == "Quality Revoked":
+        raise HTTPException(409, "Revoked QA case requires separately authorized reinspection")
+    if case and case.version != expected_version:
+        raise HTTPException(409, "Stores QA case version changed")
+    if case and db.query(StoresInspectionDecision.id).filter_by(case_id=case.id).first():
+        raise HTTPException(409, "Existing Stores decisions require manual reconciliation")
+    if case and any(Decimal(str(getattr(case, key))) != value for key, value in (
+        ("pending_qty", Decimal(str(line.quantity))),
+        ("accepted_qty", Decimal(0)),
+        ("rejected_qty", Decimal(0)),
+        ("quarantined_qty", Decimal(0)),
+    )):
+        raise HTTPException(409, "Stores case already contains dispositions")
+    if db.query(MaterialInspection.id).filter(
+        MaterialInspection.goods_receipt_id == line.goods_receipt_id,
+        MaterialInspection.status.in_(("Draft", "Pending Review", "Returned for Correction"))
+    ).first():
+        raise HTTPException(409, "Outstanding Quality inspection prevents handoff")
+    amounts = _totals(db, receipt_line_id)
+    received = Decimal(str(line.quantity))
+    approved = amounts["accepted"] + amounts["rejected"] + amounts["quarantined"]
+    if approved <= 0 or approved > received or any(q < 0 for q in amounts.values()):
+        raise HTTPException(409, "No valid approved Quality disposition to reconcile")
+    if case is None:
+        case = StoresInspectionCase(
+            organization_id=u.organization_id, project_id=pid,
+            goods_receipt_line_id=receipt_line_id, pending_qty=received,
+            accepted_qty=0, rejected_qty=0, quarantined_qty=0, created_by=u.id,
+        )
+        db.add(case)
+        db.flush()
+    case.pending_qty = received - approved
+    case.accepted_qty = amounts["accepted"]
+    case.rejected_qty = amounts["rejected"]
+    case.quarantined_qty = amounts["quarantined"]
+    case.status = "Pending Inspection" if case.pending_qty > 0 else "Disposition Recorded"
+    case.version += 1
+    for disposition, quantity in amounts.items():
+        if quantity <= 0:
+            continue
+        db.add(StoresInspectionDecision(
+            case_id=case.id, disposition=disposition.capitalize(), quantity=quantity,
+            reason="Explicit reconciliation from approved Quality material inspections",
+            idempotency_key=f"quality-handoff-{receipt_line_id}-{disposition}",
+            actor_id=u.id,
+        ))
+    audit(db, u, "quality_handoff", "stores_inspection_cases", case.id,
+          details={"receipt_line_id": receipt_line_id,
+                   "approved_quality_quantities": {k: str(v) for k, v in amounts.items()},
+                   "stock_posted": False, "lot_release_enabled": False}, project_id=pid)
+    commit(db)
+    return {**inspection_payload(case), "stock_posted": False,
+            "lot_release_enabled": False,
+            "warning": "Receipt-line QA reconciliation only; lot attribution and safe stock issue remain gated."}
