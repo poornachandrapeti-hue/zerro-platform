@@ -23,7 +23,7 @@ def decimal(value):
     return Decimal(str(value or 0))
 
 
-def reconcile_line(received, lots, inspection, posting_rows):
+def reconcile_line(received, lots, inspection, posting_rows, quality_approved=None):
     """Pure calculator; unit-specific quantities, never merges differing units."""
     lot_total = sum((decimal(lot.quantity) for lot in lots), Decimal(0))
     accepted = decimal(inspection.accepted_qty) if inspection else Decimal(0)
@@ -41,6 +41,16 @@ def reconcile_line(received, lots, inspection, posting_rows):
         flags.append("QA_CASE_MISSING")
     elif pending + accepted + rejected + quarantined != decimal(received):
         flags.append("QA_QUANTITIES_NOT_RECONCILED")
+    # Quality-owned approval is evidence, not an instruction to release stock.
+    # None means that the authoritative Quality projection was not supplied.
+    quality_qty = decimal(quality_approved) if quality_approved is not None else None
+    if quality_qty is not None:
+        if quality_qty < 0 or quality_qty > decimal(received):
+            flags.append("QUALITY_APPROVAL_OUT_OF_RANGE")
+        if quality_qty != accepted:
+            flags.append("QUALITY_STORES_ACCEPTANCE_MISMATCH")
+    if inspection is not None and inspection.status == "Quality Revoked":
+        flags.append("QUALITY_REVOKED")
     if pending or rejected or quarantined:
         flags.append("NON_ACCEPTED_MATERIAL_PRESENT")
     if posting_rows:
@@ -50,6 +60,8 @@ def reconcile_line(received, lots, inspection, posting_rows):
     return {
         "received_quantity": str(decimal(received)),
         "registered_lot_quantity": str(lot_total),
+        "quality_module_approved_quantity": str(quality_qty) if quality_qty is not None else None,
+        "quality_stores_quantity_difference": str(quality_qty - accepted) if quality_qty is not None else None,
         "unregistered_quantity": str(decimal(received) - lot_total),
         "qa": {"pending": str(pending), "accepted": str(accepted),
                "rejected": str(rejected), "quarantined": str(quarantined)},
@@ -82,12 +94,16 @@ def receipt_lot_reconciliation(pid: int, grn_id: int, u: User = Depends(authenti
         lots_by_line[lot.goods_receipt_line_id].append(lot)
     for posting_line, posting in postings:
         postings_by_line[posting_line.goods_receipt_line_id].append(posting_line)
+    # Compare the two existing approval projections without mutating either.
+    # The Quality service is the owner of approved material dispositions.
+    from app.domains.quality.material import quality_accepted
+
     result = []
     for line in lines:
         matching_lots = lots_by_line[line.id]
         result.append({
             "goods_receipt_line_id": line.id,
-            "quantity_summary": reconcile_line(line.quantity, matching_lots, cases_by_line.get(line.id), postings_by_line[line.id]),
+            "quantity_summary": reconcile_line(line.quantity, matching_lots, cases_by_line.get(line.id), postings_by_line[line.id], quality_approved=quality_accepted(db, line.id)),
             "lots": [{"lot_id": lot.id, "lot_code": lot.lot_code, "quantity": str(lot.quantity),
                       "owner_company_id": lot.owner_company_id, "custodian_company_id": lot.custodian_company_id,
                       "warehouse_id": lot.warehouse_id, "location_id": lot.location_id,
