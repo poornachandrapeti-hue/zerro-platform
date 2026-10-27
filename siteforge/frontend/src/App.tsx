@@ -510,36 +510,36 @@ export default function App() {
                                     : nav === "manpower"
                                       ? "Manpower"
                                       : nav === "equipment"
-                        ? "Equipment & Tools"
-                      : nav === "planning" || nav === "partner-planning"
-                                        ? "Planning"
-                                      : nav === "progress"
-                                        ? "Progress"
-                                      : nav === "contracts" || nav === "partner-contracts"
-                                        ? "Contracts"
-                                      : nav === "financials"
-                                        ? "Financials"
-                                      : nav === "users"
-                                        ? "People & access"
-                                        : nav === "companies"
-                                          ? "Participating companies"
-                                          : nav === "inbox"
-                                            ? "My approvals"
-                                            : nav === "tasks"
-                                              ? "My tasks"
-                                              : nav === "notifications"
-                                                ? "Notifications"
-                                                : nav === "help"
-                                                  ? "Help"
-                                                  : nav === "settings"
-                                                    ? "Settings"
-                                                    : nav === "approval-levels"
-                                                      ? "Approval levels"
-                                                      : nav === "partner-pos"
-                                                        ? "Purchase orders"
-                                                      : nav === "placeholder"
-                                                        ? placeholderName
-                                                        : "Audit history"}
+                                        ? "Equipment & Tools"
+                                        : nav === "planning" || nav === "partner-planning"
+                                          ? "Planning"
+                                          : nav === "progress"
+                                            ? "Progress"
+                                            : nav === "contracts" || nav === "partner-contracts"
+                                              ? "Contracts"
+                                              : nav === "financials"
+                                                ? "Financials"
+                                                : nav === "users"
+                                                  ? "People & access"
+                                                  : nav === "companies"
+                                                    ? "Participating companies"
+                                                    : nav === "inbox"
+                                                      ? "My approvals"
+                                                      : nav === "tasks"
+                                                        ? "My tasks"
+                                                        : nav === "notifications"
+                                                          ? "Notifications"
+                                                          : nav === "help"
+                                                            ? "Help"
+                                                            : nav === "settings"
+                                                              ? "Settings"
+                                                              : nav === "approval-levels"
+                                                                ? "Approval levels"
+                                                                : nav === "partner-pos"
+                                                                  ? "Purchase orders"
+                                                                  : nav === "placeholder"
+                                                                    ? placeholderName
+                                                                    : "Audit history"}
                 </h1>
               </div>
               <div className="identity">
@@ -629,11 +629,11 @@ export default function App() {
                     <div className="proc-nav">
                       <button type="button" className={`proc-tab tone-wlist${nav === "hr" ? " is-on" : ""}`} aria-pressed={nav === "hr"} onClick={() => setNav("hr")}>
                         <IdCard size={14} strokeWidth={2.4} />
-                        <span>HR & Workforce · workers, trades, shifts</span>
+                        <span>HR</span>
                       </button>
                       <button type="button" className={`proc-tab tone-wcrew${nav === "manpower" ? " is-on" : ""}`} aria-pressed={nav === "manpower"} onClick={() => setNav("manpower")}>
                         <UsersRound size={14} strokeWidth={2.4} />
-                        <span>Manpower · demand, crews</span>
+                        <span>Manpower</span>
                       </button>
                     </div>
                   ) : null}
