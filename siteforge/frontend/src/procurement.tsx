@@ -1389,6 +1389,192 @@ function Masters({
   const [warehouseCode, setWarehouseCode] = useState("");
   const [warehouseName, setWarehouseName] = useState("");
   const [officer, setOfficer] = useState(context.people[0]?.id || 0);
+  type SpecificationField = { key: string; label: string; type: "text" | "number" | "boolean" | "select"; required: boolean; options: string[] };
+  type SpecificationGroup = { discipline: string; categories: Array<{ name: string; fields: SpecificationField[] }> };
+  const [specTemplates, setSpecTemplates] = useState<SpecificationGroup[]>([]);
+  const [templateCategory, setTemplateCategory] = useState("");
+  const [editableFields, setEditableFields] = useState<SpecificationField[]>([]);
+  const [templateSaving, setTemplateSaving] = useState(false);
+  const [specAttributes, setSpecAttributes] = useState<Record<string, string>>({});
+  const disciplineName = catalog.disciplines.find((row) => row.id === discipline)?.name || "";
+  const specCategories = specTemplates.find((x) => x.discipline === disciplineName)?.categories || [];
+  const specFields = specCategories.find((x) => x.name === category)?.fields || [];
+  async function reloadTemplates(): Promise<SpecificationGroup[]> {
+    const rows = await api<SpecificationGroup[]>(
+      "/procurement/items/specification-templates"
+    );
+
+    setSpecTemplates(rows);
+    return rows;
+  }
+  useEffect(() => { void reloadTemplates().catch(() => { }); }, []);
+  function loadTemplate(categoryName: string) {
+    setTemplateCategory(categoryName);
+    const matching = specCategories.find((x) => x.name === categoryName);
+    setEditableFields(matching?.fields.map((field) => ({ ...field, options: [...(field.options || [])] })) || []);
+  }
+  async function saveTemplate(event: FormEvent) {
+    event.preventDefault();
+    if (!context.access.admin || !templateCategory.trim()) return;
+    setTemplateSaving(true);
+    try {
+      await api(`/procurement/items/specification-templates/${encodeURIComponent(disciplineName)}/${encodeURIComponent(templateCategory.trim())}`, "PUT", { fields: editableFields });
+      await reloadTemplates();
+      onError("");
+      onSaved();
+    } catch (err) {
+      onError((err as Error).message);
+    } finally { setTemplateSaving(false); }
+  }
+  type CatalogueReviewItem = { id: number; code: string; description: string; approval_status: string; active: boolean; version: number };
+  type CatalogueReviewEvent = { action: string; reason: string; actor_id: number; item_version: number; created_at: string };
+  const [catalogueReviewItems, setCatalogueReviewItems] = useState<CatalogueReviewItem[]>([]);
+  const [reviewItemId, setReviewItemId] = useState<number>(0);
+  const [reviewHistory, setReviewHistory] = useState<CatalogueReviewEvent[]>([]);
+  type CatalogueSpecHistory = {
+    sequence: number;
+    item_version: number;
+    event: string;
+    reason: string;
+    actor_id: number;
+    created_at: string | null;
+    snapshot: Record<string, unknown>;
+  };
+  const [specHistory, setSpecHistory] = useState<CatalogueSpecHistory[]>([]);
+  const [specHistoryBusy, setSpecHistoryBusy] = useState(false);
+  const [specHistoryError, setSpecHistoryError] = useState("");
+  const [showSpecHistory, setShowSpecHistory] = useState(false);
+  const [expandedSpecSnapshot, setExpandedSpecSnapshot] = useState<number | null>(null);
+  async function loadCatalogueSpecHistory(itemId: number) {
+    if (!itemId) { setSpecHistory([]); return; }
+    setSpecHistoryBusy(true);
+    setSpecHistoryError("");
+    try {
+      const history = await api<CatalogueSpecHistory[]>(`/procurement/items/${itemId}/specification-history`);
+      setSpecHistory(history);
+    } catch (error) {
+      setSpecHistoryError((error as Error).message);
+      setSpecHistory([]);
+    } finally { setSpecHistoryBusy(false); }
+  }
+  useEffect(() => {
+    // Prevent showing an old item's snapshots when the catalogue selection changes.
+    setSpecHistory([]);
+    setShowSpecHistory(false);
+    setExpandedSpecSnapshot(null);
+    setSpecHistoryError("");
+  }, [reviewItemId]);
+
+  type CatalogueAmendment = { id: number; status: string; base_version: number; changes: Record<string, unknown>; reason: string; submitted_by: number; decided_by: number | null; decision_reason: string | null };
+  const [amendments, setAmendments] = useState<CatalogueAmendment[]>([]);
+  const [amendmentBusy, setAmendmentBusy] = useState(false);
+  const [amendmentMessage, setAmendmentMessage] = useState("");
+  const [amendmentReason, setAmendmentReason] = useState("");
+  const [amendmentField, setAmendmentField] = useState("specification");
+  const [amendmentValue, setAmendmentValue] = useState("");
+  const [amendmentDecisionReason, setAmendmentDecisionReason] = useState("");
+  async function loadAmendments(itemId: number) {
+    if (!itemId) { setAmendments([]); return; }
+    setAmendments(await api<CatalogueAmendment[]>(`/procurement/items/${itemId}/amendments`));
+  }
+  useEffect(() => {
+    setAmendments([]);
+    setAmendmentMessage("");
+    setAmendmentReason("");
+    setAmendmentValue("");
+    setAmendmentDecisionReason("");
+    if (!reviewItemId) return;
+    let active = true;
+    void api<CatalogueAmendment[]>(`/procurement/items/${reviewItemId}/amendments`)
+      .then((rows) => { if (active) setAmendments(rows); })
+      .catch((error) => { if (active) setAmendmentMessage((error as Error).message); });
+    return () => { active = false; };
+  }, [reviewItemId]);
+  const pendingAmendment = amendments.find((row) => row.status === "Pending Approval");
+  async function requestAmendment() {
+    if (!selectedReviewItem || amendmentBusy || selectedReviewItem.approval_status !== "Approved") return;
+    if (!amendmentReason.trim() || !amendmentValue.trim()) { setAmendmentMessage("Enter a change and amendment reason."); return; }
+    let proposedValue: unknown = amendmentValue.trim();
+    if (amendmentField === "specification_attributes") {
+      try {
+        proposedValue = JSON.parse(amendmentValue);
+        if (typeof proposedValue !== "object" || proposedValue === null || Array.isArray(proposedValue)) throw Error();
+      } catch { setAmendmentMessage("Specifications must be a valid JSON object."); return; }
+    } else if (amendmentField === "inspection_required" || amendmentField === "tracking_required") {
+      if (!["true", "false"].includes(amendmentValue.trim().toLowerCase())) { setAmendmentMessage("Use true or false."); return; }
+      proposedValue = amendmentValue.trim().toLowerCase() === "true";
+    }
+    setAmendmentBusy(true); setAmendmentMessage("");
+    try {
+      await api(`/procurement/items/${selectedReviewItem.id}/amendments`, "POST", { changes: { [amendmentField]: proposedValue }, reason: amendmentReason.trim() });
+      await loadAmendments(selectedReviewItem.id);
+      setAmendmentValue(""); setAmendmentReason(""); setAmendmentMessage("Amendment submitted for review. The approved item remains unchanged.");
+    } catch (error) { setAmendmentMessage((error as Error).message); }
+    finally { setAmendmentBusy(false); }
+  }
+  async function decideAmendment(amendmentId: number, action: "Approve" | "Reject") {
+    if (!selectedReviewItem || !catalogueApprovalAllowed || amendmentBusy || amendmentDecisionReason.trim().length < 3) return;
+    setAmendmentBusy(true); setAmendmentMessage("");
+    try {
+      await api(`/procurement/items/${selectedReviewItem.id}/amendments/${amendmentId}/decision`, "POST", { action, reason: amendmentDecisionReason.trim() });
+      await Promise.all([loadAmendments(selectedReviewItem.id), refreshCatalogueReviewItems(), loadCatalogueSpecHistory(selectedReviewItem.id)]);
+      setAmendmentDecisionReason(""); setAmendmentMessage(`Amendment ${action.toLowerCase()} recorded.`);
+      onSaved();
+    } catch (error) { setAmendmentMessage((error as Error).message); }
+    finally { setAmendmentBusy(false); }
+  }
+  const [decisionReason, setDecisionReason] = useState("");
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewMessage, setReviewMessage] = useState("");
+  const [catalogueApprovalAllowed, setCatalogueApprovalAllowed] = useState(false);
+  const selectedReviewItem = catalogueReviewItems.find((item) => item.id === reviewItemId);
+  async function refreshCatalogueReviewItems() {
+    const rows = await api<CatalogueReviewItem[]>("/procurement/items");
+    setCatalogueReviewItems(rows);
+    setReviewItemId((current) => current && rows.some((item) => item.id === current) ? current : (rows[0]?.id || 0));
+  }
+  useEffect(() => {
+    let active = true;
+    void api<{ can_approve: boolean }>("/procurement/items/approval-capability")
+      .then((result) => { if (active) setCatalogueApprovalAllowed(result.can_approve); })
+      .catch(() => { if (active) setCatalogueApprovalAllowed(false); });
+    return () => { active = false; };
+  }, []);
+  useEffect(() => {
+    void refreshCatalogueReviewItems().catch((error) => onError((error as Error).message));
+  }, []);
+  useEffect(() => {
+    if (!reviewItemId) { setReviewHistory([]); return; }
+    let active = true;
+    void api<CatalogueReviewEvent[]>(`/procurement/items/${reviewItemId}/review-history`)
+      .then((rows) => { if (active) setReviewHistory(rows); })
+      .catch((error) => { if (active) onError((error as Error).message); });
+    return () => { active = false; };
+  }, [reviewItemId]);
+  async function catalogueReviewAction(action: "Submit" | "Approve" | "Reject") {
+    if (!selectedReviewItem || reviewBusy) return;
+    if (action !== "Submit" && decisionReason.trim().length < 3) {
+      setReviewMessage("Enter a reason containing at least 3 characters.");
+      return;
+    }
+    setReviewBusy(true);
+    setReviewMessage("");
+    try {
+      const endpoint = action === "Submit" ? "submit" : "decision";
+      await api(`/procurement/items/${selectedReviewItem.id}/${endpoint}`, "POST",
+        action === "Submit" ? {} : { action, reason: decisionReason.trim() });
+      await refreshCatalogueReviewItems();
+      setReviewHistory(await api<CatalogueReviewEvent[]>(`/procurement/items/${selectedReviewItem.id}/review-history`));
+      setDecisionReason("");
+      setReviewMessage(`${action} recorded successfully.`);
+      onError("");
+      onSaved();
+    } catch (error) {
+      setReviewMessage((error as Error).message);
+    } finally {
+      setReviewBusy(false);
+    }
+  }
   const canMaster = context.access.master || context.access.admin;
   async function createItem(event: FormEvent) {
     event.preventDefault();
@@ -1400,12 +1586,18 @@ function Masters({
         category,
         discipline_ids: [discipline],
         base_unit: unit,
+        specification_discipline: disciplineName,
+        specification_attributes: Object.fromEntries(specFields.filter((field) => {
+          const value = specAttributes[field.key];
+          return value !== undefined && (field.type === "boolean" || String(value).trim() !== "");
+        }).map((field) => [field.key, field.type === "boolean" ? specAttributes[field.key] === "true" : field.type === "number" ? Number(specAttributes[field.key]) : specAttributes[field.key]])),
         inspection_required: inspection,
       });
       onError("");
       onSaved();
       setCode("");
       setDescription("");
+      await refreshCatalogueReviewItems();
     } catch (err) {
       onError((err as Error).message);
     }
@@ -1448,7 +1640,8 @@ function Masters({
         </label>
         <label>
           Category
-          <input aria-label="Item category" value={category} onChange={(e) => setCategory(e.target.value)} required />
+          <input aria-label="Item category" list="item-category-options" value={category} onChange={(e) => { setCategory(e.target.value); setSpecAttributes({}); }} required />
+          <datalist id="item-category-options">{specCategories.map((c) => <option key={c.name} value={c.name} />)}</datalist>
         </label>
         <label>
           Discipline
@@ -1461,14 +1654,132 @@ function Masters({
           </select>
         </label>
         <label>
-          Base unit
+          UOM (base unit)
           <input aria-label="Base unit" value={unit} onChange={(e) => setUnit(e.target.value)} required />
         </label>
         <label>
           <input type="checkbox" checked={inspection} onChange={(e) => setInspection(e.target.checked)} /> Inspection required
         </label>
+        {specFields.length > 0 && <fieldset><legend>Technical specifications — {category}</legend>
+          {specFields.map((field) => <label key={field.key}>{field.label}{field.required ? " *" : ""}
+            {field.type === "select" ? <select aria-label={field.label} required={field.required} value={specAttributes[field.key] || ""} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: e.target.value }))}><option value="">Select an option</option>{(field.options || []).map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select>
+              : field.type === "boolean" ? <select aria-label={field.label} required={field.required} value={specAttributes[field.key] || ""} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: e.target.value }))}><option value="">Select</option><option value="true">Yes</option><option value="false">No</option></select>
+                : <input type={field.type === "number" ? "number" : "text"} step={field.type === "number" ? "any" : undefined} required={field.required} aria-label={field.label} value={specAttributes[field.key] || ""} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: e.target.value }))} />}
+          </label>)}
+        </fieldset>}
         <button type="submit" className="tone-submit">Save item</button>
       </form>
+      <section className="option-grid" aria-label="Catalogue item approval">
+        <h3 className="section-mark">Catalogue Item Review</h3>
+        <p>Draft items must be submitted before use. Only authorized reviewers can approve or reject. Decisions are enforced by the backend and cannot be made by the creator or submitter.</p>
+        <label>Catalogue item
+          <select aria-label="Review catalogue item" value={reviewItemId} onChange={(event) => { setReviewItemId(Number(event.target.value)); setReviewMessage(""); setDecisionReason(""); }}>
+            {catalogueReviewItems.length === 0 && <option value={0}>No catalogue items</option>}
+            {catalogueReviewItems.map((item) => <option key={item.id} value={item.id}>{item.code} — {item.description} ({item.approval_status})</option>)}
+          </select>
+        </label>
+        {selectedReviewItem && <>
+          <p><strong>Approval status:</strong> {selectedReviewItem.approval_status} · <strong>Active:</strong> {selectedReviewItem.active ? "Yes" : "No"} · <strong>Version:</strong> {selectedReviewItem.version}</p>
+          {(["Draft", "Rejected"].includes(selectedReviewItem.approval_status)) &&
+            <button type="button" disabled={reviewBusy} onClick={() => void catalogueReviewAction("Submit")}>Submit item for approval</button>}
+          {selectedReviewItem.approval_status === "Pending Approval" && catalogueApprovalAllowed && <>
+            <label>Decision reason (required)
+              <textarea aria-label="Catalogue decision reason" required minLength={3} maxLength={2000} value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} />
+            </label>
+            <button type="button" disabled={reviewBusy || decisionReason.trim().length < 3} onClick={() => void catalogueReviewAction("Approve")}>Approve item</button>
+            <button type="button" disabled={reviewBusy || decisionReason.trim().length < 3} onClick={() => void catalogueReviewAction("Reject")}>Reject item</button>
+          </>}
+        </>}
+        {reviewMessage && <p role="status">{reviewMessage}</p>}
+        <button type="button" disabled={reviewBusy} onClick={() => void refreshCatalogueReviewItems().catch((error) => onError((error as Error).message))}>Refresh catalogue review</button>
+        <h4>Review history</h4>
+        {reviewHistory.length === 0 ? <p>No review decisions recorded.</p> : <table><thead><tr><th>When</th><th>Action</th><th>Reviewer ID</th><th>Reason</th><th>Version</th></tr></thead><tbody>
+          {reviewHistory.map((event, index) => <tr key={`${event.created_at}-${index}`}><td>{new Date(event.created_at).toLocaleString()}</td><td>{event.action}</td><td>{event.actor_id}</td><td>{event.reason}</td><td>{event.item_version}</td></tr>)}
+        </tbody></table>}
+        <h4>Controlled catalogue amendments</h4>
+        <p>Approved items remain unchanged while amendments are pending. Item code, UOM and category cannot be amended here.</p>
+        {selectedReviewItem?.approval_status === "Approved" && !pendingAmendment && <fieldset disabled={amendmentBusy}>
+          <legend>Request technical change</legend>
+          <label>Field to change
+            <select aria-label="Amendment field" value={amendmentField} onChange={(event) => { setAmendmentField(event.target.value); setAmendmentValue(""); }}>
+              <option value="specification">Specification description</option>
+              <option value="specification_attributes">Structured specifications (JSON)</option>
+              <option value="size_rating">Size / rating</option>
+              <option value="approved_make">Approved make</option>
+              <option value="inspection_required">Inspection required (true/false)</option>
+              <option value="tracking_required">Tracking required (true/false)</option>
+            </select>
+          </label>
+          <label>Proposed value
+            <textarea aria-label="Proposed amendment value" value={amendmentValue} onChange={(event) => setAmendmentValue(event.target.value)} maxLength={amendmentField === "specification_attributes" ? undefined : 2000} placeholder={amendmentField === "specification_attributes" ? '{"flow_capacity":60}' : "Enter proposed value"} />
+          </label>
+          <label>Reason for amendment (required)
+            <textarea aria-label="Amendment request reason" value={amendmentReason} onChange={(event) => setAmendmentReason(event.target.value)} maxLength={2000} />
+          </label>
+          <button type="button" disabled={!amendmentReason.trim() || !amendmentValue.trim()} onClick={() => void requestAmendment()}>Submit amendment request</button>
+        </fieldset>}
+        {pendingAmendment && <p role="status">Amendment #{pendingAmendment.id} is pending approval. The active item remains unchanged.</p>}
+        {pendingAmendment && catalogueApprovalAllowed && <fieldset disabled={amendmentBusy}>
+          <legend>Decide pending amendment #{pendingAmendment.id}</legend>
+          <label>Decision reason (required)
+            <textarea aria-label="Amendment decision reason" minLength={3} maxLength={2000} value={amendmentDecisionReason} onChange={(event) => setAmendmentDecisionReason(event.target.value)} />
+          </label>
+          <button type="button" disabled={amendmentDecisionReason.trim().length < 3} onClick={() => void decideAmendment(pendingAmendment.id, "Approve")}>Approve amendment</button>
+          <button type="button" disabled={amendmentDecisionReason.trim().length < 3} onClick={() => void decideAmendment(pendingAmendment.id, "Reject")}>Reject amendment</button>
+          <p>Approvers cannot approve amendments they created or submitted. The server enforces this restriction.</p>
+        </fieldset>}
+        {amendmentMessage && <p role="status">{amendmentMessage}</p>}
+        <button type="button" disabled={!reviewItemId || amendmentBusy} onClick={() => void loadAmendments(reviewItemId).catch((error) => setAmendmentMessage((error as Error).message))}>Refresh amendments</button>
+        {amendments.length === 0 ? <p>No amendment requests for this item.</p> : <table><thead><tr><th>ID</th><th>Status</th><th>Base version</th><th>Proposed changes</th><th>Request reason</th><th>Submitted by</th><th>Decision</th></tr></thead><tbody>
+          {amendments.map((row) => <tr key={row.id}><td>{row.id}</td><td>{row.status}</td><td>{row.base_version}</td><td><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "300px" }}>{JSON.stringify(row.changes, null, 2)}</pre></td><td>{row.reason}</td><td>{row.submitted_by}</td><td>{row.decided_by == null ? "Pending" : `${row.decided_by}: ${row.decision_reason || "—"}`}</td></tr>)}
+        </tbody></table>}
+        <h4>Technical specification history</h4>
+        <p>Read-only item snapshots. Prior approved specifications remain visible; modifying an approved item requires a separately authorized amendment workflow.</p>
+        <button type="button" disabled={!reviewItemId || specHistoryBusy} onClick={() => {
+          if (!showSpecHistory) {
+            setShowSpecHistory(true);
+            void loadCatalogueSpecHistory(reviewItemId);
+          } else { setShowSpecHistory(false); }
+        }}>{showSpecHistory ? "Hide specification history" : "View specification history"}</button>
+        {showSpecHistory && <>
+          <button type="button" disabled={specHistoryBusy} onClick={() => void loadCatalogueSpecHistory(reviewItemId)}>Refresh specification history</button>
+          {specHistoryBusy && <p role="status">Loading specification history...</p>}
+          {specHistoryError && <p role="alert">Unable to load specification history: {specHistoryError}</p>}
+          {!specHistoryBusy && !specHistoryError && specHistory.length === 0 && <p>No specification history recorded for this item.</p>}
+          {specHistory.length > 0 && <table><thead><tr><th>Sequence</th><th>When</th><th>Event</th><th>Item version</th><th>Actor ID</th><th>Reason</th><th>Snapshot</th></tr></thead><tbody>
+            {specHistory.map((entry) => <tr key={entry.sequence}>
+              <td>{entry.sequence}</td><td>{entry.created_at ? new Date(entry.created_at).toLocaleString() : "—"}</td>
+              <td>{entry.event}</td><td>{entry.item_version}</td><td>{entry.actor_id}</td><td>{entry.reason || "—"}</td>
+              <td><button type="button" aria-label={`Toggle specification snapshot ${entry.sequence}`} onClick={() => setExpandedSpecSnapshot((old) => old === entry.sequence ? null : entry.sequence)}>{expandedSpecSnapshot === entry.sequence ? "Hide" : "View"}</button>
+                {expandedSpecSnapshot === entry.sequence && <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "460px" }}>{JSON.stringify(entry.snapshot, null, 2)}</pre>}</td>
+            </tr>)}
+          </tbody></table>}
+        </>}
+      </section>
+      {context.access.admin && <form className="option-grid" onSubmit={(event) => void saveTemplate(event)}>
+        <h3 className="section-mark">Specification Template Master (Organization Admin)</h3>
+        <p>Configure specification fields for your organization. Existing built-in templates remain as fallbacks. Changes to a live template can affect future item validation; review carefully before saving.</p>
+        <label>Discipline
+          <select aria-label="Template discipline" value={discipline} onChange={(e) => { setDiscipline(Number(e.target.value)); setTemplateCategory(""); setEditableFields([]); }}>
+            {catalog.disciplines.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+          </select>
+        </label>
+        <label>Category
+          <input aria-label="Template category" list="spec-template-category-options" value={templateCategory} onChange={(e) => loadTemplate(e.target.value)} required maxLength={120} />
+          <datalist id="spec-template-category-options">{specCategories.map((c) => <option key={c.name} value={c.name} />)}</datalist>
+        </label>
+        {editableFields.map((field, index) => <fieldset key={`${index}-${field.key}`}>
+          <legend>Field {index + 1}</legend>
+          <label>Key <input aria-label={`Specification field ${index + 1} key`} pattern="[a-z][a-z0-9_]*" required value={field.key} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, key: e.target.value } : f))} /></label>
+          <label>Label <input aria-label={`Specification field ${index + 1} label`} required value={field.label} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, label: e.target.value } : f))} /></label>
+          <label>Type <select aria-label={`Specification field ${index + 1} type`} value={field.type} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, type: e.target.value as SpecificationField["type"], options: e.target.value === "select" ? f.options : [] } : f))}>{["text", "number", "boolean", "select"].map((t) => <option key={t}>{t}</option>)}</select></label>
+          <label><input type="checkbox" checked={field.required} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, required: e.target.checked } : f))} /> Required</label>
+          {field.type === "select" && <label>Options (one per line)<textarea aria-label={`Specification field ${index + 1} options`} value={field.options.join("\n")} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, options: e.target.value.split("\n").map((v) => v.trim()).filter(Boolean) } : f))} /></label>}
+          <button type="button" onClick={() => setEditableFields((old) => old.filter((_, i) => i !== index))}>Remove field</button>
+        </fieldset>)}
+        <button type="button" onClick={() => setEditableFields((old) => [...old, { key: "", label: "", type: "text", required: false, options: [] }])}>Add specification field</button>
+        <button type="submit" className="tone-submit" disabled={templateSaving || !templateCategory.trim() || editableFields.length === 0}>{templateSaving ? "Saving..." : "Save organization template"}</button>
+      </form>}
       <form
         className="option-grid"
         onSubmit={(event) => {
@@ -3038,17 +3349,17 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
                   <option value="">Select item</option>
                   {reservation
                     ? reservation.lines
-                        .filter((line) => Number(line.remaining) > 0)
-                        .map((line) => (
-                          <option key={line.id} value={line.item_id}>
-                            {line.item_code} reserved {line.remaining} {line.unit}
-                          </option>
-                        ))
-                    : warehouseItems.map((row) => (
-                        <option key={row.item_id} value={row.item_id}>
-                          {row.item_code} available {row.available} {row.unit}
+                      .filter((line) => Number(line.remaining) > 0)
+                      .map((line) => (
+                        <option key={line.id} value={line.item_id}>
+                          {line.item_code} reserved {line.remaining} {line.unit}
                         </option>
-                      ))}
+                      ))
+                    : warehouseItems.map((row) => (
+                      <option key={row.item_id} value={row.item_id}>
+                        {row.item_code} available {row.available} {row.unit}
+                      </option>
+                    ))}
                 </select>
               </label>
               {action === "Reserve" && !packageId && (

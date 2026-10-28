@@ -142,6 +142,7 @@ def default_permissions(name):
             "procurement.requisition.edit",
             "procurement.requisition.review",
             "procurement.master.edit",
+            "procurement.catalogue.approve",
             "procurement.commercial.view",
             "procurement.rfq.edit",
             "procurement.po.edit",

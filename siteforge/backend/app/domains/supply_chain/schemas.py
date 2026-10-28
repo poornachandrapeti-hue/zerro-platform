@@ -18,6 +18,8 @@ class ItemIn(Strict):
     discipline_ids: list[int] = Field(min_length=1)
     specification: str = ""
     size_rating: str = ""
+    specification_discipline: str = ""
+    specification_attributes: dict[str, str | int | float] = Field(default_factory=dict)
     base_unit: str = Field(min_length=1, max_length=20)
     approved_make: str = ""
     inspection_required: bool = False

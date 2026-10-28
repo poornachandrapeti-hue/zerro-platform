@@ -376,6 +376,7 @@ def import_list(db, user, project, drawing, revision, filename, payload, mode):
     catalogue = {
         row.code_key: row
         for row in db.query(ProcurementItem).filter_by(organization_id=user.organization_id, active=True)
+        if row.approval_status == "Approved"
     }
     rows = []
     for index, record in enumerate(records[1:], start=2):
@@ -506,8 +507,9 @@ def _clean(data, db, user, project, row):
             from app.domains.supply_chain.models import ProcurementItem
 
             item = db.get(ProcurementItem, item_id)
-            if not item or item.organization_id != user.organization_id or not item.active:
-                raise HTTPException(422, "Choose an active catalogue item")
+            from app.domains.supply_chain.catalogue_exchange import is_approved_item
+            if not item or item.organization_id != user.organization_id or not is_approved_item(item):
+                raise HTTPException(422, "Choose an approved and active catalogue item")
         values["item_id"] = item_id
     return values
 
@@ -1064,6 +1066,20 @@ def create_requirement(db, user, project, row, data):
             422,
             "Match a catalogue item on MTO line(s) " + ", ".join(map(str, unmatched)) + " before creating the requirement",
         )
+    from app.domains.supply_chain.catalogue_exchange import is_approved_item
+    from app.domains.supply_chain.models import ProcurementItem
+    ineligible = [line.position for line in lines
+                  if not is_approved_item(db.get(ProcurementItem, line.item_id))]
+    if ineligible:
+        raise HTTPException(422, "MTO line(s) " + ", ".join(map(str, ineligible)) +
+                            " reference catalogue items that are not approved and active")
+    from app.domains.supply_chain.catalogue_exchange import is_approved_item
+    from app.domains.supply_chain.models import ProcurementItem
+    ineligible = [line.position for line in lines
+                  if not is_approved_item(db.get(ProcurementItem, line.item_id))]
+    if ineligible:
+        raise HTTPException(422, "MTO line(s) " + ", ".join(map(str, ineligible)) +
+                            " reference catalogue items that are not approved and active")
     _bump(db, row, data.version)
     drawing = db.get(Drawing, row.drawing_id)
     references = {line.id: _reference(db, row, line) for line in lines}

@@ -34,6 +34,9 @@ class ProcurementItem(Base):
     category: Mapped[str] = mapped_column(String(120))
     discipline_ids: Mapped[list] = mapped_column(JSON, default=list)
     specification: Mapped[str] = mapped_column(Text, default="")
+    approval_status: Mapped[str] = mapped_column(String(24), default="Draft")
+    submitted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    specification_attributes: Mapped[dict] = mapped_column(JSON, default=dict)
     size_rating: Mapped[str] = mapped_column(String(120), default="")
     base_unit: Mapped[str] = mapped_column(String(20))
     approved_make: Mapped[str] = mapped_column(String(200), default="")
@@ -44,6 +47,68 @@ class ProcurementItem(Base):
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     modified_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueItemAmendment(Base):
+    """Isolated proposed technical change; approved item remains unchanged until approval."""
+    __tablename__ = "procurement_item_amendments"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("procurement_items.id"), index=True)
+    base_version: Mapped[int] = mapped_column(Integer)
+    proposed: Mapped[dict] = mapped_column(JSON)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(24), default="Pending Approval")
+    submitted_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    decided_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    decision_reason: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class CatalogueItemSpecificationHistory(Base):
+    """Append-only snapshots of catalogue item specifications and approval transitions."""
+    __tablename__ = "procurement_item_specification_history"
+    __table_args__ = (UniqueConstraint("item_id", "sequence"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("procurement_items.id"), index=True)
+    sequence: Mapped[int] = mapped_column(Integer)
+    item_version: Mapped[int] = mapped_column(Integer)
+    event: Mapped[str] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(Text, default="")
+    snapshot: Mapped[dict] = mapped_column(JSON)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CatalogueItemReview(Base):
+    """Immutable decisions for organization-scoped item approvals."""
+    __tablename__ = "procurement_item_reviews"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("procurement_items.id"), index=True)
+    action: Mapped[str] = mapped_column(String(24))
+    reason: Mapped[str] = mapped_column(Text)
+    item_version: Mapped[int] = mapped_column(Integer)
+    specification_snapshot: Mapped[dict] = mapped_column(JSON, default=dict)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now)
+
+
+class CatalogueSpecificationTemplate(Base):
+    """Organization-scoped specification configuration; does not replace item identities."""
+    __tablename__ = "procurement_specification_templates"
+    __table_args__ = (UniqueConstraint("organization_id", "discipline", "category"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    discipline: Mapped[str] = mapped_column(String(100))
+    category: Mapped[str] = mapped_column(String(120))
+    fields: Mapped[list] = mapped_column(JSON, default=list)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
 
 

@@ -1,3 +1,4 @@
+from .models import CatalogueSpecificationTemplate
 from datetime import datetime, timezone
 from decimal import Decimal
 from io import BytesIO
@@ -1190,6 +1191,8 @@ def flag_revision(db, user, revision_id, detail):
 
 def save_item(db, user, data, row=None):
     _org_master(db, user)
+    if row is not None and row.approval_status not in ("Draft", "Rejected"):
+        raise HTTPException(409, "Submitted or approved item cannot be edited; use a controlled revision")
     if data.item_type not in ITEM_TYPES:
         raise HTTPException(422, "Type must be Material, Equipment, Consumable, or Spare")
     disciplines = []
@@ -1198,6 +1201,10 @@ def save_item(db, user, data, row=None):
         if not discipline:
             raise HTTPException(422, "Choose a discipline from the organization list")
         disciplines.append(discipline.id)
+    # Preserve structured attributes on unrelated legacy item edits. Category changes
+    # invalidate old attributes unless a matching new set is provided.
+    existing_category = row.category if row is not None else None
+    existing_attributes = dict(row.specification_attributes or {}) if row is not None else {}
     if row is None:
         row = ProcurementItem(
             organization_id=user.organization_id,
@@ -1221,12 +1228,25 @@ def save_item(db, user, data, row=None):
         row.base_unit = data.base_unit.strip()
     row.discipline_ids = disciplines
     flag_modified(row, "discipline_ids")
+    from .specification_templates import validate_configured_attributes
+    if data.specification_attributes:
+        # Use the discipline name from the authenticated organization's master, never a client-supplied ID alone.
+        if not data.specification_discipline:
+            raise HTTPException(422, "Select a specification discipline")
+        names = [db.get(Discipline, discipline_id).name for discipline_id in disciplines]
+        if data.specification_discipline not in names and not db.query(CatalogueSpecificationTemplate).filter_by(organization_id=user.organization_id, discipline=data.specification_discipline, category=data.category, active=True).first():
+            raise HTTPException(422, "Specification discipline must match the item's assigned discipline")
+        row.specification_attributes = validate_configured_attributes(db, user.organization_id, data.specification_discipline, data.category, data.specification_attributes)
+    elif existing_category == data.category and existing_attributes:
+        row.specification_attributes = existing_attributes
+    else:
+        row.specification_attributes = {}
     row.specification = data.specification
     row.size_rating = data.size_rating
     row.approved_make = data.approved_make
     row.inspection_required = data.inspection_required
     row.tracking_required = data.tracking_required
-    row.active = data.active
+    row.active = False if row.approval_status == "Draft" else data.active
     _stamp(row, user)
     db.flush()
     return row
@@ -1246,6 +1266,8 @@ def item_payload(row, db):
             if db.get(Discipline, discipline_id)
         ],
         "specification": row.specification,
+        "specification_attributes": row.specification_attributes or {},
+        "approval_status": row.approval_status,
         "size_rating": row.size_rating,
         "base_unit": row.base_unit,
         "approved_make": row.approved_make,
@@ -1586,14 +1608,20 @@ def _cell(header, row, name):
 
 def import_items(db, user, data, mode):
     _org_master(db, user)
+    from .catalogue_import_validation import duplicate_codes, MAX_IMPORT_ROWS
+    if len(data) > 5 * 1024 * 1024:
+        raise HTTPException(413, "Catalogue import exceeds 5 MB")
     if mode not in {"preview", "confirm", "update"}:
         raise HTTPException(422, "Import mode must be preview, confirm, or update")
     header, rows = _sheet(data)
+    if len(rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(422, f"Catalogue import supports at most {MAX_IMPORT_ROWS} rows")
     required = ["code", "description", "type", "category", "disciplines", "unit"]
     missing = [name for name in required if name not in header]
     if missing:
         raise HTTPException(422, "Missing columns: " + ", ".join(missing))
     disciplines = {_key(row.name): row for row in db.query(Discipline)}
+    duplicate_rows = duplicate_codes(header, rows)
     preview = []
     errors = []
     for index, row in enumerate(rows, start=2):
@@ -1605,6 +1633,8 @@ def import_items(db, user, data, mode):
         row_errors = []
         if not code:
             row_errors.append("code is required")
+        if index in duplicate_rows:
+            row_errors.append(f"duplicate item code in workbook (rows {', '.join(map(str, duplicate_rows[index]))})")
         if _cell(header, row, "type") not in ITEM_TYPES:
             row_errors.append("type must be Material, Equipment, Consumable, or Spare")
         if not _cell(header, row, "description") or not _cell(header, row, "category") or not _cell(header, row, "unit"):
@@ -1627,6 +1657,8 @@ def import_items(db, user, data, mode):
         action = "update" if existing else "create"
         if existing and mode != "update":
             row_errors.append("this item code already exists")
+        if existing and mode == "update" and existing.approval_status not in ("Draft", "Rejected"):
+            row_errors.append("approved or submitted item cannot be updated by import; use controlled amendment")
         if row_errors:
             errors.append({"row": index, "messages": row_errors})
         preview.append(
@@ -1711,7 +1743,7 @@ def import_requirements(db, user, project, data, mode):
             people[_key(person.email)] = person
     items = {
         _key(row.code): row
-        for row in db.query(ProcurementItem).filter_by(organization_id=user.organization_id, active=True)
+        for row in db.query(ProcurementItem).filter_by(organization_id=user.organization_id, active=True, approval_status="Approved")
     }
     grouped = {}
     errors = []

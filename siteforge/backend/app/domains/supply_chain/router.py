@@ -7,12 +7,16 @@ from app.domains.engineering_documents.files import read_file, store_file
 from app.domains.engineering_documents.models import StoredFile
 from app.domains.identity_projects.models import User
 from app.domains.identity_projects.router import audit, commit
-from app.domains.identity_projects.security import authenticated, permitted
+from app.domains.identity_projects.security import authenticated, permitted, admin
 
 from .models import (
     MaterialRequirement,
     ProcurementFile,
     ProcurementItem,
+    CatalogueItemReview,
+    CatalogueItemAmendment,
+    CatalogueItemSpecificationHistory,
+    CatalogueSpecificationTemplate,
     PurchaseRequisition,
     UnitConversion,
     Vendor,
@@ -83,6 +87,55 @@ def context(pid: int, u: User = Depends(authenticated), db: Session = Depends(ge
     return service.context(db, u, project)
 
 
+@router.get("/procurement/items/specification-templates")
+def item_specification_templates(u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from .specification_templates import configured_templates
+    return configured_templates(db, u.organization_id)
+
+
+@router.put("/procurement/items/specification-templates/{discipline}/{category}")
+def save_specification_template(
+    discipline: str, category: str, data: dict,
+    u: User = Depends(admin), db: Session = Depends(get_db),
+):
+    from .specification_templates import validate_template_fields
+    if not (1 <= len(discipline) <= 100 and 1 <= len(category) <= 120):
+        raise HTTPException(422, "Invalid discipline or category")
+    if not isinstance(data, dict) or set(data) != {"fields"}:
+        raise HTTPException(422, "Expected fields only")
+    fields = validate_template_fields(data["fields"])
+    row = db.query(CatalogueSpecificationTemplate).filter_by(
+        organization_id=u.organization_id, discipline=discipline, category=category).first()
+    if row is None:
+        row = CatalogueSpecificationTemplate(organization_id=u.organization_id,
+            discipline=discipline, category=category, fields=fields,
+            modified_by=u.id)
+        db.add(row)
+    else:
+        row.fields = fields
+        row.active = True
+        row.version += 1
+        row.modified_by = u.id
+    db.flush()
+    audit(db, u, "update", "procurement_specification_templates", row.id,
+          {"discipline": discipline, "category": category, "version": row.version})
+    commit(db)
+    return {"id": row.id, "version": row.version, "fields": row.fields}
+
+
+
+@router.get("/procurement/items/approval-capability")
+def catalogue_approval_capability(u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    """Expose approval UI eligibility; backend decision endpoint still enforces RBAC."""
+    try:
+        _catalogue_approve_role(db, u)
+    except HTTPException as error:
+        if error.status_code == 403:
+            return {"can_approve": False}
+        raise
+    return {"can_approve": True}
+
+
 @router.get("/procurement/items")
 def items(u: User = Depends(authenticated), db: Session = Depends(get_db)):
     rows = (
@@ -94,9 +147,21 @@ def items(u: User = Depends(authenticated), db: Session = Depends(get_db)):
     return [service.item_payload(row, db) for row in rows]
 
 
+@router.get("/procurement/items/export.csv")
+def export_catalogue(u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    """Organization-scoped CSV export with structured technical attributes."""
+    from .catalogue_exchange import export_catalogue_csv
+    rows = (db.query(ProcurementItem).filter_by(organization_id=u.organization_id)
+            .order_by(ProcurementItem.code).all())
+    return Response(export_catalogue_csv(rows), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": "attachment; filename=catalogue-items.csv"})
+
+
 @router.post("/procurement/items", status_code=201)
 def create_item(data: ItemIn, u: User = Depends(authenticated), db: Session = Depends(get_db)):
     row = service.save_item(db, u, data)
+    from .catalogue_specification_history import record_item_history
+    record_item_history(db, u, row, "Created")
     audit(db, u, "create", "procurement_items", row.id)
     commit(db)
     db.refresh(row)
@@ -111,10 +176,197 @@ def update_item(
     if not row or row.organization_id != u.organization_id:
         raise HTTPException(404, "Item not found")
     service.save_item(db, u, data, row)
+    from .catalogue_specification_history import record_item_history
+    record_item_history(db, u, row, "Updated")
     audit(db, u, "update", "procurement_items", row.id)
     commit(db)
     db.refresh(row)
     return service.item_payload(row, db)
+
+
+def _catalogue_item(db, u, item_id):
+    item = db.get(ProcurementItem, item_id)
+    if item is None or item.organization_id != u.organization_id:
+        raise HTTPException(404, "Item not found")
+    return item
+
+
+def _catalogue_approve_role(db, user):
+    # Explicit permission, not procurement.master.edit: a catalogue editor must not
+    # become an approver automatically. Organization administrators retain authority.
+    from .catalogue_authorization import can_approve_catalogue
+    from app.domains.identity_projects.models import Membership, Project, Role
+
+    if user.organization_admin:
+        return
+    memberships = (
+        db.query(Membership)
+        .join(Project, Project.id == Membership.project_id)
+        .filter(
+            Membership.user_id == user.id,
+            Membership.active.is_(True),
+            Project.organization_id == user.organization_id,
+        )
+    )
+    permissions = []
+    for membership in memberships:
+        role = db.get(Role, membership.role_id)
+        if role:
+            permissions.extend(role.permissions or [])
+    if not can_approve_catalogue(False, permissions):
+        raise HTTPException(403, "Catalogue approval permission required")
+
+
+def _catalogue_decision(db, u, item, action, reason):
+    db.add(CatalogueItemReview(organization_id=u.organization_id, item_id=item.id,
+        action=action, reason=reason, actor_id=u.id, item_version=item.version,
+        specification_snapshot={"code": item.code, "description": item.description,
+            "category": item.category, "unit": item.base_unit,
+            "attributes": dict(item.specification_attributes or {})}))
+
+
+@router.post("/procurement/items/{item_id}/submit")
+def submit_catalogue_item(item_id: int, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    item = _catalogue_item(db, u, item_id)
+    if item.approval_status not in ("Draft", "Rejected"):
+        raise HTTPException(409, "Only draft or rejected items can be submitted")
+    if item.created_by != u.id and not u.organization_admin:
+        raise HTTPException(403, "Only the creator or organization administrator can submit")
+    item.approval_status = "Pending Approval"
+    item.submitted_by = u.id
+    item.active = False
+    _catalogue_decision(db, u, item, "Submitted", "Submitted for review")
+    from .catalogue_specification_history import record_item_history
+    record_item_history(db, u, item, "Submitted", "Submitted for review")
+    audit(db, u, "submit", "procurement_items", item.id)
+    commit(db)
+    return service.item_payload(item, db)
+
+
+@router.post("/procurement/items/{item_id}/decision")
+def catalogue_decision(item_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from .catalogue_approval import validate_decision
+    action, reason = validate_decision(data)
+    _catalogue_approve_role(db, u)
+    item = _catalogue_item(db, u, item_id)
+    if item.approval_status != "Pending Approval":
+        raise HTTPException(409, "Item is not pending approval")
+    if item.submitted_by == u.id or item.created_by == u.id:
+        raise HTTPException(403, "Creator/submitter cannot approve or reject own item")
+    item.approval_status = "Approved" if action == "Approve" else "Rejected"
+    item.active = action == "Approve"
+    _catalogue_decision(db, u, item, action, reason)
+    from .catalogue_specification_history import record_item_history
+    record_item_history(db, u, item, action, reason)
+    audit(db, u, action.lower(), "procurement_items", item.id, {"reason": reason})
+    commit(db)
+    return service.item_payload(item, db)
+
+
+@router.get("/procurement/items/{item_id}/amendments")
+def list_catalogue_amendments(item_id: int, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    _catalogue_item(db, u, item_id)
+    rows = db.query(CatalogueItemAmendment).filter_by(
+        organization_id=u.organization_id, item_id=item_id
+    ).order_by(CatalogueItemAmendment.id).all()
+    return [{"id": r.id, "status": r.status, "base_version": r.base_version,
+             "changes": r.proposed, "reason": r.reason, "submitted_by": r.submitted_by,
+             "decided_by": r.decided_by, "decision_reason": r.decision_reason} for r in rows]
+
+
+@router.post("/procurement/items/{item_id}/amendments", status_code=201)
+def submit_catalogue_amendment(item_id: int, data: dict,
+                               u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from .catalogue_amendments import validate_amendment
+    from .specification_templates import validate_configured_attributes
+    # Reuse existing master-edit authorization, not merely authenticated access.
+    service._org_master(db, u)
+    item = db.query(ProcurementItem).filter_by(id=item_id, organization_id=u.organization_id).with_for_update().first()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    if item.approval_status != "Approved":
+        raise HTTPException(409, "Only approved catalogue items can be amended")
+    if db.query(CatalogueItemAmendment).filter_by(item_id=item.id, status="Pending Approval").first():
+        raise HTTPException(409, "An amendment is already pending")
+    changes, reason = validate_amendment(data)
+    if "specification_attributes" in changes:
+        # Do not accept arbitrary technical keys. Use the existing item discipline
+        # and configured template, with no client-controlled category replacement.
+        from app.domains.identity_projects.models import Discipline
+        names = [db.get(Discipline, x).name for x in (item.discipline_ids or [])]
+        if not names:
+            raise HTTPException(422, "Item has no discipline for specification validation")
+        changes = dict(changes)
+        changes["specification_attributes"] = validate_configured_attributes(
+            db, u.organization_id, names[0], item.category, changes["specification_attributes"])
+    amendment = CatalogueItemAmendment(
+        organization_id=u.organization_id, item_id=item.id, base_version=item.version,
+        proposed=changes, reason=reason, submitted_by=u.id)
+    db.add(amendment)
+    db.flush()
+    audit(db, u, "submit_amendment", "procurement_items", item.id, {"amendment_id": amendment.id})
+    commit(db)
+    return {"id": amendment.id, "status": amendment.status, "base_version": amendment.base_version}
+
+
+@router.post("/procurement/items/{item_id}/amendments/{amendment_id}/decision")
+def decide_catalogue_amendment(item_id: int, amendment_id: int, data: dict,
+                               u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from .catalogue_amendments import require_separation, require_current_version
+    from .catalogue_approval import validate_decision
+    from .catalogue_specification_history import record_item_history
+    from datetime import datetime, timezone
+    action, reason = validate_decision(data)
+    _catalogue_approve_role(db, u)
+    item = db.query(ProcurementItem).filter_by(id=item_id, organization_id=u.organization_id).with_for_update().first()
+    if not item:
+        raise HTTPException(404, "Item not found")
+    amendment = db.query(CatalogueItemAmendment).filter_by(
+        id=amendment_id, organization_id=u.organization_id, item_id=item.id
+    ).with_for_update().first()
+    if not amendment:
+        raise HTTPException(404, "Amendment not found")
+    if amendment.status != "Pending Approval" or item.approval_status != "Approved":
+        raise HTTPException(409, "Amendment is not eligible for decision")
+    require_separation(amendment.submitted_by, item.created_by, u.id)
+    require_current_version(amendment.base_version, item.version)
+    if action == "Approve":
+        # Snapshot before mutating active item. Do not change item code, UOM,
+        # category or its immutable identity used by downstream ledgers.
+        record_item_history(db, u, item, "PreAmendment", amendment.reason)
+        for field, value in amendment.proposed.items():
+            setattr(item, field, value)
+        item.version += 1
+        item.modified_by = u.id
+        record_item_history(db, u, item, "Amended", reason)
+    amendment.status = "Approved" if action == "Approve" else "Rejected"
+    amendment.decided_by = u.id
+    amendment.decision_reason = reason
+    amendment.decided_at = datetime.now(timezone.utc)
+    audit(db, u, "decide_amendment", "procurement_items", item.id,
+          {"amendment_id": amendment.id, "decision": action, "reason": reason})
+    commit(db)
+    return {"id": amendment.id, "status": amendment.status, "item_version": item.version}
+
+
+@router.get("/procurement/items/{item_id}/specification-history")
+def catalogue_specification_history(item_id: int, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    """Read-only, organization-scoped catalogue version history."""
+    _catalogue_item(db, u, item_id)
+    from .catalogue_specification_history import history_payload
+    rows = db.query(CatalogueItemSpecificationHistory).filter_by(
+        organization_id=u.organization_id, item_id=item_id
+    ).order_by(CatalogueItemSpecificationHistory.sequence).all()
+    return [history_payload(row) for row in rows]
+
+
+@router.get("/procurement/items/{item_id}/review-history")
+def catalogue_review_history(item_id: int, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    _catalogue_item(db, u, item_id)
+    rows = db.query(CatalogueItemReview).filter_by(organization_id=u.organization_id, item_id=item_id).order_by(CatalogueItemReview.id).all()
+    return [{"action": x.action, "reason": x.reason, "actor_id": x.actor_id,
+             "item_version": x.item_version, "specification_snapshot": x.specification_snapshot,
+             "created_at": x.created_at.isoformat()} for x in rows]
 
 
 @router.get("/procurement/items/template")
