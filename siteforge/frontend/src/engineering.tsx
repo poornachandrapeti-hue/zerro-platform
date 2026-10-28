@@ -341,6 +341,7 @@ export function EngineeringBoard({
   const [people, setPeople] = useState<User[]>([]);
   const [areas, setAreas] = useState<Area[]>([]);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [categories, setCategories] = useState<Category[]>([]);
   const [tasks, setTasks] = useState<{
     preparation: { id: number; number: string }[];
@@ -358,6 +359,7 @@ export function EngineeringBoard({
   const [tab, setTab] = useState<EngTab>("Dashboard");
   const [detailTab, setDetailTab] = useState("Overview");
   async function openDrawing(id: number, nextTab = "Overview") {
+    setNotice("");
     setDetailTab(nextTab);
     setDrawing(await api<Drawing>(`/projects/${pid}/drawings/${id}`));
     setTab("Drawing detail");
@@ -468,6 +470,11 @@ export function EngineeringBoard({
         })}
       </div>
       <Err text={error} />
+      {notice ? (
+        <p className="muted" role="status">
+          {notice}
+        </p>
+      ) : null}
       {view && (
         <EngineeringDashboard
           pid={pid}
@@ -490,6 +497,16 @@ export function EngineeringBoard({
             onChange={(row) => {
               setDrawing(row);
               void loadRegister().catch((err) => setError((err as Error).message));
+            }}
+            onDeleted={(row) => {
+              setDrawing(null);
+              setError("");
+              setNotice(`Drawing ${row.number} was deleted.`);
+              setTab("Drawing register");
+              void loadRegister().catch((err) => setError((err as Error).message));
+              void api<typeof tasks>("/projects/" + pid + "/engineering-tasks")
+                .then(setTasks)
+                .catch(() => setTasks(null));
             }}
             onError={setError}
           />
@@ -1721,6 +1738,7 @@ function DrawingDetail({
   userId,
   initialTab = "Overview",
   onChange,
+  onDeleted,
   onError,
 }: {
   pid: number;
@@ -1730,8 +1748,32 @@ function DrawingDetail({
   userId: number;
   initialTab?: string;
   onChange: (row: Drawing) => void;
+  onDeleted: (row: Drawing) => void;
   onError: (text: string) => void;
 }) {
+  const [deleting, setDeleting] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  async function confirmDelete(event: FormEvent) {
+    event.preventDefault();
+    if (!deleteReason.trim()) {
+      setDeleteError("Enter the reason for deleting this drawing.");
+      return;
+    }
+    setDeleteBusy(true);
+    try {
+      await api<{ ok: boolean }>(`/projects/${pid}/drawings/${drawing.id}/delete`, "POST", {
+        reason: deleteReason.trim(),
+        version: drawing.version,
+      });
+      setDeleting(false);
+      onDeleted(drawing);
+    } catch (err) {
+      setDeleteError((err as Error).message);
+      setDeleteBusy(false);
+    }
+  }
   const [tab, setTab] = useState<(typeof DETAIL_TABS)[number]>(
     DETAIL_TABS.includes(initialTab as (typeof DETAIL_TABS)[number])
       ? (initialTab as (typeof DETAIL_TABS)[number])
@@ -1846,6 +1888,56 @@ function DrawingDetail({
               Cancel drawing
             </button>
           )}
+          {drawing.actions?.includes("delete") && (
+            <button
+              type="button"
+              className="ed-danger"
+              onClick={() => {
+                setDeleteReason("");
+                setDeleteError("");
+                setDeleteBusy(false);
+                setDeleting(true);
+              }}
+            >
+              Delete drawing
+            </button>
+          )}
+        </div>
+      )}
+      {deleting && (
+        <div className="ed-dialog-backdrop" onKeyDown={(event) => event.key === "Escape" && !deleteBusy && setDeleting(false)}>
+          <form
+            className="ed-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="ed-delete-title"
+            onSubmit={(event) => void confirmDelete(event)}
+          >
+            <h3 id="ed-delete-title">Delete drawing {drawing.number}?</h3>
+            <p className="muted">
+              The drawing is removed from the register. Its number stays reserved and the deletion is kept in the audit
+              history. This cannot be undone from the register.
+            </p>
+            <label>
+              Reason for deletion
+              <textarea
+                autoFocus
+                required
+                maxLength={2000}
+                value={deleteReason}
+                onChange={(event) => setDeleteReason(event.target.value)}
+              />
+            </label>
+            {deleteError ? <p className="error" role="alert">{deleteError}</p> : null}
+            <div className="ed-actions">
+              <button type="button" disabled={deleteBusy} onClick={() => setDeleting(false)}>
+                Keep drawing
+              </button>
+              <button type="submit" className="ed-danger" disabled={deleteBusy || !deleteReason.trim()}>
+                {deleteBusy ? "Deleting…" : "Delete drawing"}
+              </button>
+            </div>
+          </form>
         </div>
       )}
       {tab === "Overview" && <OverviewCards pid={pid} drawing={drawing} people={people} onChange={onChange} onError={onError} />}

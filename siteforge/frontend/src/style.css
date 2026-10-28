@@ -4243,6 +4243,12 @@ button.proc-tab.is-on { color: #fff; }
 .ed-actions button { width: auto; padding: 8px 16px; border-radius: 10px; }
 .ed-danger { background: #fff; color: #be123c; border: 1px solid #fecdd3; }
 .ed-danger:hover { background: #fff1f2; }
+.ed-dialog-backdrop { position: fixed; inset: 0; z-index: 1000; display: grid; place-items: center; padding: 16px; background: rgba(8, 40, 77, 0.45); }
+.ed-dialog { display: grid; gap: 12px; width: min(520px, 100%); padding: 20px; border-radius: 14px; background: #fff; box-shadow: 0 20px 50px rgba(8, 40, 77, 0.3); }
+.ed-dialog h3 { margin: 0; }
+.ed-dialog label { display: grid; gap: 6px; font-weight: 600; }
+.ed-dialog textarea { min-height: 90px; }
+.ed-dialog .ed-actions { justify-content: flex-end; }
 .ed-overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.1fr); gap: 14px; }
 .ed-assign { display: grid; gap: 10px; }
 .ed-assign-row { display: grid; grid-template-columns: 170px minmax(0, 1fr); gap: 10px; align-items: center; padding-bottom: 10px; border-bottom: 1px dashed #e2e8f0; font-size: 13.5px; }
@@ -5054,3 +5060,71 @@ button.proc-tab.tone-kflow.is-on { background: #9f1239; }
 button.proc-tab.tone-kamend.is-on { background: #4338ca; }
 button.proc-tab.tone-klink.is-on { background: #0e7490; }
 button.proc-tab.tone-krec.is-on { background: #a16207; }
+/* Store & Inventory module tabs */
+button.proc-tab.tone-swh svg { color: #1d4ed8; background: #dbeafe; }
+button.proc-tab.tone-swh.is-on { background: #1d4ed8; }
+button.proc-tab.tone-sgrn svg { color: #0f766e; background: #ccfbf1; }
+button.proc-tab.tone-sgrn.is-on { background: #0f766e; }
+button.proc-tab.tone-sasn svg { color: #c2410c; background: #ffedd5; }
+button.proc-tab.tone-sasn.is-on { background: #c2410c; }
+button.proc-tab.tone-sintake svg { color: #6d28d9; background: #ede9fe; }
+button.proc-tab.tone-sintake.is-on { background: #6d28d9; }
+button.proc-tab.tone-sreq svg { color: #4338ca; background: #e0e7ff; }
+button.proc-tab.tone-sreq.is-on { background: #4338ca; }
+button.proc-tab.tone-shand svg { color: #0369a1; background: #e0f2fe; }
+button.proc-tab.tone-shand.is-on { background: #0369a1; }
+button.proc-tab.tone-sret svg { color: #9f1239; background: #ffe4e6; }
+button.proc-tab.tone-sret.is-on { background: #9f1239; }
+button.proc-tab.tone-sxfer svg { color: #0e7490; background: #cffafe; }
+button.proc-tab.tone-sxfer.is-on { background: #0e7490; }
+button.proc-tab.tone-spres svg { color: #b45309; background: #fef3c7; }
+button.proc-tab.tone-spres.is-on { background: #b45309; }
+button.proc-tab.tone-sops7 svg { color: #475569; background: #e2e8f0; }
+button.proc-tab.tone-sops7.is-on { background: #334155; }
+button.proc-tab.tone-sops5 svg { color: #9a3412; background: #ffedd5; }
+button.proc-tab.tone-sops5.is-on { background: #9a3412; }
+button.proc-tab.tone-suse svg { color: #166534; background: #dcfce7; }
+button.proc-tab.tone-suse.is-on { background: #166534; }
+button.proc-tab.tone-sbal svg { color: #047857; background: #d1fae5; }
+button.proc-tab.tone-sbal.is-on { background: #047857; }
+.st-stack { display: grid; gap: 6px; min-width: 200px; }
+.st-divider { margin-top: 20px; padding-top: 14px; border-top: 1px solid #e2e8f0; }
+/* Equipment & Tools module tabs */
+button.proc-tab.tone-eqreg svg { color: #1d4ed8; background: #dbeafe; }
+button.proc-tab.tone-eqreg.is-on { background: #1d4ed8; }
+button.proc-tab.tone-eqavail svg { color: #0f766e; background: #ccfbf1; }
+button.proc-tab.tone-eqavail.is-on { background: #0f766e; }
+button.proc-tab.tone-eqalloc svg { color: #6d28d9; background: #ede9fe; }
+button.proc-tab.tone-eqalloc.is-on { background: #6d28d9; }
+button.proc-tab.tone-equse svg { color: #0369a1; background: #e0f2fe; }
+button.proc-tab.tone-equse.is-on { background: #0369a1; }
+button.proc-tab.tone-eqmaint svg { color: #b45309; background: #fef3c7; }
+button.proc-tab.tone-eqmaint.is-on { background: #b45309; }
+button.proc-tab.tone-eqcomp svg { color: #166534; background: #dcfce7; }
+button.proc-tab.tone-eqcomp.is-on { background: #166534; }
+button.proc-tab.tone-eqcust svg { color: #4338ca; background: #e0e7ff; }
+button.proc-tab.tone-eqcust.is-on { background: #4338ca; }
+button.proc-tab.tone-eqhire svg { color: #9f1239; background: #ffe4e6; }
+button.proc-tab.tone-eqhire.is-on { background: #9f1239; }
+button.proc-tab.tone-eqdash svg { color: #c2410c; background: #ffedd5; }
+button.proc-tab.tone-eqdash.is-on { background: #c2410c; }
+.eq-dash-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 640px) { .eq-dash-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.state-in-transit,
+.state-pending-qa,
+.state-awaiting-qa,
+.state-discrepancy {
+  background: #ffedd5;
+  color: #9a3412;
+}
+.state-verified,
+.state-qa-accepted,
+.state-active {
+  background: #dcfce7;
+  color: #166534;
+}
+.state-quarantined,
+.state-overdue {
+  background: #ffe4e6;
+  color: #9f1239;
+}

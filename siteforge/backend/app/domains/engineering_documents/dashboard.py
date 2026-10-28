@@ -455,7 +455,7 @@ def snapshot(db, user, project, filters, today=None):
     disciplines = accessible_disciplines(db, user, project)
     allowed = {row["id"] for row in disciplines}
 
-    query = db.query(Drawing).filter_by(project_id=project.id)
+    query = db.query(Drawing).filter_by(project_id=project.id).filter(Drawing.record_status != "Deleted")
     status = filters.get("record_status") or "Active"
     if status != "All":
         query = query.filter_by(record_status=status)

@@ -511,6 +511,8 @@ export default function App() {
                                       ? "Manpower"
                                       : nav === "equipment"
                                         ? "Equipment & Tools"
+                                        : nav === "stores"
+                                        ? "Store & Inventory"
                                         : nav === "planning" || nav === "partner-planning"
                                           ? "Planning"
                                           : nav === "progress"

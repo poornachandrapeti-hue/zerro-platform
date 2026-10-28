@@ -2,7 +2,11 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from .models import Discipline, Role
 
+# Assigned by an administrator per user and per project through a project membership.
+DRAWING_DELETION_ROLE = "Drawing Deletion Authority"
+
 GRANTS = {
+    DRAWING_DELETION_ROLE: ["projects.view", "drawings.view", "engineering.drawings.delete"],
     "Project Manager": [
         "projects.view",
         "projects.edit",
@@ -76,6 +80,7 @@ ROLE_NAMES = [
     "Contract Manager",
     "Manpower Coordinator",
     "Equipment Coordinator",
+    DRAWING_DELETION_ROLE,
 ]
 
 

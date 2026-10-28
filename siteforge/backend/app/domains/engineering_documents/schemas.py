@@ -45,6 +45,11 @@ class CancelIn(Strict):
     version: int = Field(gt=0)
 
 
+class DeleteIn(Strict):
+    reason: str = Field(min_length=1, max_length=2000)
+    version: int = Field(gt=0)
+
+
 class EngineeringSettingIn(Strict):
     allow_release_with_comments: bool = False
 

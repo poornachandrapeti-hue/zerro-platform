@@ -1,0 +1,617 @@
+﻿
+===== construction\progress.py =====
+ 240: def _count_line(line, report, pending):
+ 241:     if line.rework or report.status == "Cancelled" or report.status == "Rejected":
+ 242:         return False
+ 243:     if report.status == "Approved":
+ 244:         return True
+ 245:     return pending and report.status == "Pending Review"
+ 246: 
+ 247: 
+ 248: def _accepted_line(db, activity):
+ 249:     from app.domains.quality.models import QualityOffer, QualityOfferLine
+ 250: 
+ 251:     offer = (
+ 252:         db.query(QualityOfferLine)
+ 253:         .join(QualityOffer, QualityOffer.id == QualityOfferLine.offer_id)
+ 254:         .filter(QualityOfferLine.activity_id == activity.id, QualityOffer.status == "Approved")
+ 255:         .order_by(QualityOfferLine.id.desc())
+ 256:         .first()
+ 257:     )
+ 258:     if offer and (offer.accepted_quantity is not None or offer.accepted_percent is not None):
+ 259:         return offer
+ 260:     from app.domains.quality.requests import construction_acceptance
+ 261: 
+ 262:     return construction_acceptance(db, activity)
+ 263: 
+ 264: 
+ 265: def activity_measures(db, activity):
+ 266:     package = db.get(WorkPackage, activity.package_id)
+ 267:     milestones = _milestones(db, activity)
+ 268:     scope = _q(activity.quantity)
+ 269:     reported = Decimal("0.000")
+ 270:     verified = Decimal("0.000")
+ 271:     rework = Decimal("0.000")
+ 272:     reported_weight = Decimal("0.00")
+ 273:     verified_weight = Decimal("0.00")
+ 274:     for line, report in _activity_lines(db, activity):
+ 275:         if line.rework and line.quantity:
+ 276:             rework += _q(line.quantity)
+ 277:         if activity.measurement_method == "Weighted milestones":
+ 278:             milestone = db.get(ActivityMilestone, line.milestone_id) if line.milestone_id else None
+ 279:             if not milestone or line.rework:
+ 280:                 continue
+ 281:             sign = Decimal("-1") if line.reverses_line_id else Decimal("1")
+ 282:             if _count_line(line, report, pending=False):
+ 283:                 verified_weight += sign * _w(milestone.weight)
+ 284:             if _count_line(line, report, pending=True):
+ 285:                 reported_weight += sign * _w(milestone.weight)
+ 286:             continue
+ 287:         if not line.quantity:
+ 288:             continue
+ 289:         amount = _q(line.quantity)
+ 290:         sign = Decimal("-1") if line.reverses_line_id else Decimal("1")
+ 291:         if line.rework:
+ 292:             continue
+ 293:         if _count_line(line, report, pending=False):
+ 294:             verified += sign * amount
+ 295:         if _count_line(line, report, pending=True):
+ 296:             reported += sign * amount
+ 297:     weighted = activity.measurement_method == "Weighted milestones"
+ 298:     ready = weighted and _weight_total(milestones) == Decimal("100.00")
+ 299:     accepted = _accepted_line(db, activity)
+ 300:     accepted_quantity = qty(accepted.accepted_quantity) if accepted and accepted.accepted_quantity is not None else None
+ 301:     accepted_percent = format(accepted.accepted_percent, "f") if accepted and accepted.accepted_percent is not None else None
+ 302:     if accepted_quantity:
+ 303:         accepted_note = (
+ 304:             f"Accepted {accepted_quantity} {activity.unit}. "
+ 305:             "This quality decision does not certify the work for billing."
+ 306:         )
+ 307:     elif accepted_percent:
+ 308:         accepted_note = (
+ 309:             f"Accepted {accepted_percent}% of the milestone weight. "
+ 310:             "This quality decision does not certify the work for billing."
+ 311:         )
+ 312:     else:
+ 313:         accepted_note = ACCEPTED
+ 314:     if weighted:
+ 315:         reported_percent = format(reported_weight, "f") if ready else None
+ 316:         verified_percent = format(verified_weight, "f") if ready else None
+ 317:         note = (
+ 318:             f"Verified {verified_percent}% from approved milestones. {accepted_note} {CERTIFIED}"
+ 319:             if ready
+ 320:             else f"Verified progress is N/A until milestone weights total 100%. {accepted_note}"
+ 321:         )
+ 322:     else:
+ 323:         reported_percent = _pct(reported, scope)
+ 324:         verified_percent = _pct(verified, scope)
+ 325:         shown = verified_percent if verified_percent is not None else "N/A"
+ 326:         note = (
+ 327:             f"Scope {qty(scope)} {activity.unit}. Reported {qty(reported)}. "
+ 328:             f"Verified {qty(verified)} ({shown}%). {accepted_note} {CERTIFIED}"
+ 329:         )
+ 330:     return {
+ 331:         "activity_id": activity.id,
+ 332:         "activity_code": activity.code,
+ 333:         "package_id": activity.package_id,
+ 334:         "package_code": package.code if package else "",
+ 335:         "package_status": package.status if package else "",
+ 336:         "discipline_id": package.discipline_id if package else None,
+ 337:         "area_id": package.area_id if package else None,
+ 338:         "company_id": activity.company_id,
+ 339:         "method": activity.measurement_method,
+ 340:         "scope_quantity": None if weighted else qty(scope),
+ 341:         "unit": "" if weighted else activity.unit,
+ 342:         "reported_quantity": None if weighted else qty(reported),
+ 343:         "verified_quantity": None if weighted else qty(verified),
+ 344:         "rework_quantity": qty(rework),
+ 345:         "accepted_quantity": accepted_quantity,
+ 346:         "certified_quantity": None,
+ 347:         "reported_percent": reported_percent,
+ 348:         "verified_percent": verified_percent,
+ 349:         "accepted_note": accepted_note,
+ 350:         "certified_note": CERTIFIED,
+ 351:         "note": note,
+ 352:         "items": [
+ 353:             {"id": item.id, "identifier": item.identifier}
+ 354:             for item in db.query(ConstructionItem).filter_by(activity_id=activity.id, active=True)
+ 355:         ],
+
+===== quality\requests.py =====
+  90:     )
+  91: 
+  92: 
+  93: def _approved_requests(db, activity):
+  94:     return (
+  95:         db.query(ConstructionRequest)
+  96:         .filter_by(activity_id=activity.id, status="Approved")
+  97:         .order_by(ConstructionRequest.id)
+  98:         .all()
+  99:     )
+ 100: 
+ 101: 
+ 102: def _offer_accepted(db, activity):
+ 103:     line = (
+ 104:         db.query(QualityOfferLine)
+ 105:         .join(QualityOffer, QualityOffer.id == QualityOfferLine.offer_id)
+ 106:         .filter(QualityOfferLine.activity_id == activity.id, QualityOffer.status == "Approved")
+ 107:         .order_by(QualityOfferLine.id.desc())
+ 108:         .first()
+ 109:     )
+ 110:     if not line:
+ 111:         return Decimal("0"), None
+ 112:     quantity = _q(line.accepted_quantity) if line.accepted_quantity is not None else Decimal("0")
+ 113:     return quantity, line.accepted_percent
+ 114: 
+ 115: 
+ 116: def inspection_accepted(db, activity):
+ 117:     total = Decimal("0")
+ 118:     for row in _approved_requests(db, activity):
+ 119:         if row.outcome in {"Accepted", "Partially Accepted"} and row.accepted_quantity is not None:
+ 120:             total += _q(row.accepted_quantity)
+ 121:     return total
+ 122: 
+ 123: 
+ 124: def accepted_so_far(db, activity):
+ 125:     offer_quantity, _percent = _offer_accepted(db, activity)
+ 126:     return offer_quantity + inspection_accepted(db, activity)
+ 127: 
+ 128: 
+ 129: def percent_accepted(db, activity):
+ 130:     _quantity, offer_percent = _offer_accepted(db, activity)
+ 131:     if offer_percent is not None and offer_percent >= Decimal("100"):
+ 132:         return True
+ 133:     return any(row.accepted_percent is not None and row.accepted_percent >= Decimal("100") for row in _approved_requests(db, activity))
+ 134: 
+ 135: 
+ 136: def construction_acceptance(db, activity):
+ 137:     quantity = Decimal("0")
+ 138:     percent = None
+ 139:     for row in _approved_requests(db, activity):
+ 140:         if row.outcome not in {"Accepted", "Partially Accepted"}:
+ 141:             continue
+ 142:         if row.accepted_quantity is not None:
+ 143:             quantity += _q(row.accepted_quantity)
+ 144:         if row.accepted_percent is not None:
+ 145:             percent = row.accepted_percent
+ 146:     if quantity <= 0 and percent is None:
+ 147:         return None
+ 148:     return _Acceptance(quantity if quantity > 0 else None, percent)
+ 149: 
+ 150: 
+ 151: def _activity(db, project, activity_id):
+ 152:     activity = db.get(ConstructionActivity, activity_id)
+ 153:     package = db.get(WorkPackage, activity.package_id) if activity else None
+ 154:     if not activity or not activity.active or not package or package.project_id != project.id:
+ 155:         raise HTTPException(404, "Activity not found")
+
+===== progress_monitoring\p2c2_link_router.py =====
+   1: """P2C2B: audited Construction/QA evidence binding decisions.
+   2: 
+   3: No progress rollup or billing write. Requires P2C2A migration at deployment.
+   4: """
+   5: from datetime import datetime, timezone
+   6: from decimal import Decimal, InvalidOperation
+   7: 
+   8: from fastapi import APIRouter, Depends, HTTPException
+   9: from pydantic import BaseModel, Field
+  10: from sqlalchemy import text
+  11: from sqlalchemy.exc import IntegrityError
+  12: from sqlalchemy.orm import Session
+  13: 
+  14: from app.db import get_db
+  15: from app.domains.identity_projects.security import authenticated
+  16: from app.domains.identity_projects.models import User, Membership, Role
+  17: from app.domains.construction.models import ProgressReport, ProgressLine, ConstructionActivity
+  18: from app.domains.quality.models import ConstructionRequest
+  19: from .router import progress_scope
+  20: from .p2c_source_readback import allowed
+  21: from .p2c2_link_models import ProgressEvidenceLink as Link, ProgressEvidenceLinkEvent as Event
+  22: 
+  23: router = APIRouter(prefix="/api/projects/{pid}/progress/evidence-links", tags=["Progress Evidence Links"])
+  24: 
+  25: 
+  26: class Proposal(BaseModel):
+  27:     report_id: int = Field(gt=0)
+  28:     progress_line_id: int = Field(gt=0)
+  29:     inspection_request_id: int = Field(gt=0)
+  30:     accepted_quantity: Decimal = Field(gt=0, max_digits=14, decimal_places=3)
+  31:     binding_evidence_ref: str = Field(min_length=1, max_length=240)
+  32: 
+  33: 
+  34: class Decision(BaseModel):
+  35:     version: int = Field(gt=0)
+  36:     note: str = Field(min_length=3, max_length=2000)
+  37: 
+  38: 
+  39: def _rights(db, user, pid, permission):
+  40:     # Explicit per-project grants only. An organization administrator has full scope,
+  41:     # but still cannot review a proposal they authored.
+  42:     if not user.active:
+  43:         raise HTTPException(403, 'Inactive user')
+  44:     progress_scope(db, user, pid)  # project/internal visibility precondition
+  45:     if user.organization_admin:
+  46:         return {'all': True, 'pairs': []}
+  47:     memberships = db.query(Membership).filter_by(project_id=pid, user_id=user.id, active=True).all()
+  48:     eligible = []
+  49:     for m in memberships:
+  50:         role = db.get(Role, m.role_id)
+  51:         perms = set(role.permissions or []) if role else set()
+  52:         if permission in perms and 'planning.partner.view' not in perms:
+  53:             eligible.append(m)
+  54:     if not eligible:
+  55:         raise HTTPException(403, f'Missing project permission: {permission}')
+  56:     if any(m.scope == 'ALL' for m in eligible):
+  57:         return {'all': True, 'pairs': []}
+  58:     return {'all': False, 'pairs': [
+  59:         (m.company_id, {int(d) for d in (m.discipline_ids or [])}) for m in eligible
+  60:     ]}
+  61: 
+  62: 
+  63: def _source(db, user, pid, scope, report_id, line_id, inspection_id):
+  64:     report = db.query(ProgressReport).filter_by(id=report_id, organization_id=user.organization_id, project_id=pid).first()
+  65:     line = db.get(ProgressLine, line_id)
+  66:     inspection = db.query(ConstructionRequest).filter_by(id=inspection_id, organization_id=user.organization_id, project_id=pid).first()
+  67:     if not report or not line or not inspection or line.report_id != report.id:
+  68:         raise HTTPException(404, 'Construction/QA source not found')
+  69:     activity = db.query(ConstructionActivity).filter_by(id=line.activity_id, organization_id=user.organization_id, project_id=pid).first()
+  70:     if not activity or inspection.activity_id != activity.id or activity.company_id != report.company_id or activity.discipline_id != report.discipline_id or inspection.company_id != report.company_id or inspection.package_id != activity.package_id:
+  71:         raise HTTPException(409, 'Source scope, activity or package mismatch')
+  72:     if not allowed(report.company_id, report.discipline_id, scope):
+  73:         raise HTTPException(404, 'Construction/QA source not found')
+  74:     if report.status != 'Approved' or inspection.status != 'Approved' or inspection.outcome not in ('Accepted', 'Partially Accepted'):
+  75:         raise HTTPException(409, 'Construction and QA approvals required')
+  76:     if line.rework or line.reverses_line_id is not None:
+  77:         raise HTTPException(409, 'Rework or reversal requires reconciliation')
+  78:     try:
+  79:         capacity = Decimal(str(line.quantity))
+  80:         qa_capacity = Decimal(str(inspection.accepted_quantity))
+  81:         if not all(x.is_finite() and x > 0 for x in (capacity, qa_capacity)):
+  82:             raise ValueError()
+  83:     except (InvalidOperation, ValueError, TypeError):
+  84:         raise HTTPException(409, 'Invalid source quantities')
+  85:     return capacity, qa_capacity
+  86: 
+  87: 
+  88: def _event(db, link, action, actor, note=''):
+  89:     db.add(Event(link_id=link.id, organization_id=link.organization_id, project_id=link.project_id, action=action, actor_id=actor, note=note))
+  90: 
+  91: 
+  92: def _view(link):
+  93:     return {'id': link.id, 'organization_id': link.organization_id, 'project_id': link.project_id,
+  94:             'report_id': link.report_id, 'progress_line_id': link.progress_line_id,
+  95:             'inspection_request_id': link.inspection_request_id, 'accepted_quantity': str(link.accepted_quantity),
+  96:             'status': link.status, 'version': link.version, 'created_by': link.created_by,
+  97:             'reviewed_by': link.reviewed_by, 'earned_progress': False, 'billing_certified': False}
+  98: 
+  99: 
+ 100: @router.post('')
+ 101: def propose(pid: int, body: Proposal, user: User = Depends(authenticated), db: Session = Depends(get_db)):
+ 102:     scope = _rights(db, user, pid, 'progress.evidence.propose')
+ 103:     capacity, qa_capacity = _source(db, user, pid, scope, body.report_id, body.progress_line_id, body.inspection_request_id)
+ 104:     if body.accepted_quantity > min(capacity, qa_capacity):
+ 105:         raise HTTPException(409, 'Proposed quantity exceeds source capacity')
+ 106:     if not body.binding_evidence_ref.strip():
+ 107:         raise HTTPException(422, 'Binding evidence reference required')
+ 108:     link = Link(organization_id=user.organization_id, project_id=pid, report_id=body.report_id,
+ 109:                 progress_line_id=body.progress_line_id, inspection_request_id=body.inspection_request_id,
+ 110:                 accepted_quantity=body.accepted_quantity, binding_evidence_ref=body.binding_evidence_ref.strip(),
+ 111:                 status='Proposed', created_by=user.id, version=1)
+ 112:     try:
+ 113:         db.add(link)
+ 114:         db.flush()
+ 115:         _event(db, link, 'Proposed', user.id)
+ 116:         db.commit()
+ 117:     except IntegrityError:
+ 118:         db.rollback()
+ 119:         raise HTTPException(409, 'Duplicate evidence link or invalid source reference')
+ 120:     return _view(link)
+ 121: 
+ 122: 
+ 123: @router.post('/{link_id}/decisions/{action}')
+ 124: def decide(pid: int, link_id: int, action: str, body: Decision, user: User = Depends(authenticated), db: Session = Depends(get_db)):
+ 125:     if action not in ('approve', 'reject', 'revoke'):
+ 126:         raise HTTPException(404, 'Unsupported decision')
+ 127:     permission = 'progress.evidence.revoke' if action == 'revoke' else 'progress.evidence.review'
+ 128:     scope = _rights(db, user, pid, permission)
+ 129:     link = db.query(Link).filter_by(id=link_id, organization_id=user.organization_id, project_id=pid).with_for_update().first()
+ 130:     if link is None:
+ 131:         raise HTTPException(404, 'Evidence link not found')
+ 132:     report = db.query(ProgressReport).filter_by(id=link.report_id, organization_id=user.organization_id, project_id=pid).first()
+ 133:     if not report or not allowed(report.company_id, report.discipline_id, scope):
+ 134:         raise HTTPException(404, 'Evidence link not found')
+ 135:     if link.created_by == user.id:
+ 136:         raise HTTPException(403, 'Independent reviewer required')
+ 137:     if link.version != body.version:
+ 138:         raise HTTPException(409, 'Evidence link was modified; refresh and retry')
+ 139:     if (action in ('approve', 'reject') and link.status != 'Proposed') or (action == 'revoke' and link.status != 'Approved'):
+ 140:         raise HTTPException(409, 'Invalid state transition')
+ 141:     if action == 'approve':
+ 142:         capacity, qa_capacity = _source(db, user, pid, scope, link.report_id, link.progress_line_id, link.inspection_request_id)
+ 143:         if link.accepted_quantity > min(capacity, qa_capacity):
+ 144:             raise HTTPException(409, 'Source quantity changed since proposal')
+ 145:         # Serialize approvals for the same project to avoid concurrent over-allocation.
+ 146:         # The advisory lock is transaction-scoped and only serializes P2C2B writers.
+ 147:         db.execute(text('SELECT pg_advisory_xact_lock(:ns, :project)'),
+ 148:                    {'ns': 931142, 'project': pid})
+ 149:         # A QA request can be split across lines, and a construction line across
+ 150:         # inspections; independently cap both cumulative Approved allocations.
+ 151:         others = db.query(Link).filter(Link.organization_id == user.organization_id,
+ 152:               Link.project_id == pid, Link.status == 'Approved', Link.id != link.id).with_for_update().all()
+ 153:         line_total = sum((Decimal(str(x.accepted_quantity)) for x in others if x.progress_line_id == link.progress_line_id), Decimal(0))
+ 154:         inspection_total = sum((Decimal(str(x.accepted_quantity)) for x in others if x.inspection_request_id == link.inspection_request_id), Decimal(0))
+ 155:         if line_total + link.accepted_quantity > capacity or inspection_total + link.accepted_quantity > qa_capacity:
+ 156:             raise HTTPException(409, 'Previously approved links exhaust source quantity')
+ 157:     elif action == 'revoke':
+ 158:         # Revocation must stay possible after source rejection/cancellation.
+ 159:         report = db.query(ProgressReport).filter_by(id=link.report_id, organization_id=user.organization_id, project_id=pid).first()
+ 160:         if not report or not allowed(report.company_id, report.discipline_id, scope):
+ 161:             raise HTTPException(404, 'Evidence link not found')
+ 162:     status = {'approve': 'Approved', 'reject': 'Rejected', 'revoke': 'Revoked'}[action]
+ 163:     link.status = status
+ 164:     link.reviewed_by = user.id
+ 165:     link.reviewed_at = datetime.now(timezone.utc)
+ 166:     link.review_note = body.note.strip()
+ 167:     link.version += 1
+ 168:     _event(db, link, status, user.id, link.review_note)
+ 169:     db.commit()
+ 170:     return _view(link)
+ 171: 
+ 172: 
+ 173: @router.get('/{link_id}')
+ 174: def read_link(pid: int, link_id: int, user: User = Depends(authenticated), db: Session = Depends(get_db)):
+ 175:     scope = _rights(db, user, pid, 'progress.evidence.view')
+
+===== progress_monitoring\p3b_source_projection.py =====
+   1: """P3B read-only, scoped canonical source projection for a Construction line.
+   2: 
+   3: Do not infer independent quantity verification, approved Planning baseline, earned
+   4: progress or billing from supervisor approval, QA quantity or a WBS code match.
+   5: """
+   6: from decimal import Decimal
+   7: from fastapi import HTTPException
+   8: from sqlalchemy.orm import Session
+   9: from app.domains.construction.models import ConstructionActivity, ProgressReport, ProgressLine
+  10: from app.domains.quality.models import ConstructionRequest
+  11: from .p2c2_link_models import ProgressEvidenceLink
+  12: from .p2c_source_readback import allowed
+  13: from .router import progress_scope
+  14: 
+  15: 
+  16: def _dec(value):
+  17:     return Decimal(str(value))
+  18: 
+  19: 
+  20: def read_line_evidence(db: Session, user, project_id: int, line_id: int):
+  21:     """Read one line and its active approved QA allocations with a scoped identity.
+  22: 
+  23:     Return source provenance only. Caller supplies independent verified quantity
+  24:     and approved Planning baseline when the separate P3A calculator is integrated.
+  25:     """
+  26:     scope = progress_scope(db, user, project_id)
+  27:     line = db.get(ProgressLine, line_id)
+  28:     if line is None:
+  29:         raise HTTPException(404, 'Construction progress line not found')
+  30:     report = db.query(ProgressReport).filter_by(
+  31:         id=line.report_id, organization_id=user.organization_id, project_id=project_id).first()
+  32:     if report is None or not allowed(report.company_id, report.discipline_id, scope):
+  33:         raise HTTPException(404, 'Construction progress line not found')
+  34:     activity = db.query(ConstructionActivity).filter_by(
+  35:         id=line.activity_id, organization_id=user.organization_id, project_id=project_id).first()
+  36:     if activity is None or activity.company_id != report.company_id or activity.discipline_id != report.discipline_id:
+  37:         raise HTTPException(409, 'Construction activity scope mismatch')
+  38:     if line.unit != activity.unit:
+  39:         raise HTTPException(409, 'Construction measurement unit mismatch')
+  40:     links = db.query(ProgressEvidenceLink).filter_by(
+  41:         organization_id=user.organization_id, project_id=project_id,
+  42:         report_id=report.id, progress_line_id=line.id, status='Approved').all()
+  43:     seen = set()
+  44:     allocations = []
+  45:     accepted = Decimal('0')
+  46:     for link in links:
+  47:         if link.inspection_request_id in seen:
+  48:             raise HTTPException(409, 'Duplicate approved QA inspection allocation')
+  49:         seen.add(link.inspection_request_id)
+  50:         if link.created_by == link.reviewed_by or not link.reviewed_by:
+  51:             raise HTTPException(409, 'QA link lacks independent review')
+  52:         qa = db.query(ConstructionRequest).filter_by(
+  53:             id=link.inspection_request_id, organization_id=user.organization_id, project_id=project_id).first()
+  54:         if qa is None or qa.activity_id != line.activity_id or qa.company_id != activity.company_id:
+  55:             raise HTTPException(409, 'QA source missing or scope changed')
+  56:         if qa.status != 'Approved' or qa.outcome not in ('Accepted', 'Partially Accepted'):
+  57:             raise HTTPException(409, 'QA source no longer accepted')
+  58:         qty = _dec(link.accepted_quantity)
+  59:         if qty <= 0 or qa.accepted_quantity is None or qty > _dec(qa.accepted_quantity):
+  60:             raise HTTPException(409, 'QA link exceeds currently accepted inspection quantity')
+  61:         accepted += qty
+  62:         allocations.append({
+  63:             'link_id': link.id, 'inspection_request_id': qa.id,
+  64:             'accepted_quantity': str(qty), 'link_version': link.version,
+  65:             'reviewer_user_id': link.reviewed_by,
+  66:         })
+  67:     if line.quantity is None or _dec(line.quantity) < 0:
+  68:         raise HTTPException(409, 'Construction line lacks a valid reported quantity')
+  69:     if accepted > _dec(line.quantity):
+  70:         raise HTTPException(409, 'QA allocations exceed reported Construction quantity')
+  71:     return {
+  72:         'organization_id': user.organization_id, 'project_id': project_id,
+  73:         'activity_id': activity.id, 'report_id': report.id,
+  74:         'construction_line_id': line.id, 'report_status': report.status,
+  75:         'unit': activity.unit, 'reported_quantity': str(_dec(line.quantity)),
+  76:         'qa_accepted_quantity': str(accepted), 'qa_allocations': allocations,
+  77:         'construction_verified_quantity': None,
+  78:         'approved_planning_quantity': None,
+  79:         'measurement': None, 'earned_percent': None,
+  80:         'billing_eligible_quantity': None,
+  81:         'status': 'SOURCE_READBACK_ONLY',
+  82:         'limitations': [
+  83:             'Approved Construction report is not independent quantity verification',
+  84:             'Construction activity baseline is not proof of approved Planning baseline',
+  85:             'No progress, billing or Finance write performed',
+  86:         ],
+  87:     }
+
+===== progress_monitoring\p3c1d_verification_router.py =====
+  55:     return result
+  56: 
+  57: 
+  58: def _source(db, user, pid, scope, line_id, planning_activity_id):
+  59:     """Re-read both canonical source records, never trusting submitted IDs as proof."""
+  60:     construction = read_line_evidence(db, user, pid, line_id)
+  61:     line = db.get(ProgressLine, line_id)
+  62:     if line is None or line.rework or line.reverses_line_id is not None:
+  63:         raise HTTPException(409, 'Rework/reversal line cannot be independently verified')
+  64:     if construction['report_status'] != 'Approved':
+  65:         raise HTTPException(409, 'Construction report must be approved')
+  66:     # _rights checks project permission; do not let wider Progress scope override it.
+  67:     from app.domains.construction.models import ProgressReport
+  68:     report = db.query(ProgressReport).filter_by(
+  69:         id=construction['report_id'], organization_id=user.organization_id,
+  70:         project_id=pid,
+  71:     ).first()
+  72:     if report is None or not allowed(report.company_id, report.discipline_id, scope):
+  73:         raise HTTPException(404, 'Construction line not visible')
+  74:     baseline = read_authoritative_baseline(
+  75:         db, user, pid, planning_activity_id=planning_activity_id,
+  76:         construction_activity_id=construction['activity_id'],
+  77:         unit=construction['unit'],
+  78:     )
+  79:     if baseline.get('status') != 'APPROVED_QUANTITY_FOUND':
+  80:         raise HTTPException(409, 'Approved mapped Planning quantity unavailable')
+  81:     planned = _qty(baseline['approved_planning_quantity'])
+  82:     reported = _qty(construction['reported_quantity'])
+  83:     qa_accepted = _qty(construction['qa_accepted_quantity'])
+  84:     if planned <= 0 or reported > planned or qa_accepted > reported:
+  85:         raise HTTPException(409, 'Source quantities inconsistent with approved baseline')
+  86:     return construction, baseline, planned, reported, qa_accepted
+  87: 
+  88: 
+  89: def _event(db, record, action, actor, note=''):
+  90:     db.add(VerificationEvent(
+  91:         verification_id=record.id, organization_id=record.organization_id,
+  92:         project_id=record.project_id, action=action,
+  93:         actor_user_id=actor, note=note,
+  94:     ))
+  95: 
+  96: 
+  97: def _view(record):
+  98:     return {
+  99:         'id': record.id, 'project_id': record.project_id,
+ 100:         'progress_line_id': record.progress_line_id,
+ 101:         'baseline_revision_id': record.baseline_revision_id,
+ 102:         'verified_quantity': str(record.verified_quantity), 'unit': record.unit,
+ 103:         'status': record.status, 'version': record.version,
+ 104:         'proposer_user_id': record.proposer_user_id,
+ 105:         'reviewer_user_id': record.reviewer_user_id,
+ 106:         'verification_reference': record.verification_reference,
+ 107:         'published': False, 'earned_progress': False, 'billing_certified': False,
+ 108:     }
+ 109: 
+ 110: 
+ 111: def _visible(db, user, pid, record, scope):
+ 112:     from app.domains.construction.models import ProgressReport
+ 113:     report = db.query(ProgressReport).filter_by(
+ 114:         id=record.report_id, organization_id=user.organization_id, project_id=pid,
+ 115:     ).first()
+ 116:     if report is None or not allowed(report.company_id, report.discipline_id, scope):
+ 117:         raise HTTPException(404, 'Verification not found')
+ 118: 
+ 119: 
+ 120: @router.post('')
+
+===== progress_monitoring\p5_commercial_boundary.py =====
+   1: """P5 read-only commercial boundary for Progress.
+   2: 
+   3: Caller MUST supply values from server-side authorized database readbacks. This module
+   4: is not an authentication boundary and never creates invoices, certificates, or GL.
+   5: Unpublished P3 previews are explicitly not eligible for a billing handoff.
+   6: """
+   7: from decimal import Decimal, InvalidOperation
+   8: 
+   9: 
+  10: class CommercialBoundaryError(ValueError):
+  11:     pass
+  12: 
+  13: 
+  14: def _quantity(value):
+  15:     if isinstance(value, bool):
+  16:         raise CommercialBoundaryError("Invalid boolean quantity")
+  17:     try:
+  18:         value = Decimal(str(value))
+  19:     except (InvalidOperation, TypeError, ValueError) as exc:
+  20:         raise CommercialBoundaryError("Invalid quantity") from exc
+  21:     if not value.is_finite() or value < 0:
+  22:         raise CommercialBoundaryError("Quantity must be nonnegative and finite")
+  23:     return value
+  24: 
+  25: 
+  26: def inspect_commercial_handoff(*, progress, contract, organization_id, project_id,
+  27:                                authorized, server_revalidated):
+  28:     """Return read-only eligibility assessment; never authorize billing or payment."""
+  29:     if authorized is not True or server_revalidated is not True:
+  30:         raise CommercialBoundaryError("Server authorization and fresh source validation required")
+  31:     if not isinstance(progress, dict) or not isinstance(contract, dict):
+  32:         raise CommercialBoundaryError("Canonical progress and contract records required")
+  33:     for record in (progress, contract):
+  34:         if (record.get("organization_id"), record.get("project_id")) != (organization_id, project_id):
+  35:             raise CommercialBoundaryError("Cross-scope authority")
+  36:         if record.get("server_authorized") is not True:
+  37:             raise CommercialBoundaryError("Missing server-grounded source")
+  38:     if progress.get("status") != "Published" or progress.get("published") is not True:
+  39:         raise CommercialBoundaryError("Only persisted Published snapshots may enter commercial review")
+  40:     if progress.get("publication_persisted") is not True or progress.get("approval_audit_valid") is not True:
+  41:         raise CommercialBoundaryError("Published snapshot lacks persisted audit authority")
+  42:     if progress.get("source_integrity_valid") is not True or progress.get("revoked") is True:
+  43:         raise CommercialBoundaryError("Measurement evidence invalid or revoked")
+  44:     if contract.get("status") != "Active" or contract.get("billing_terms_approved") is not True:
+  45:         raise CommercialBoundaryError("Contract is not approved for billing review")
+  46:     if not progress.get("snapshot_id") or not progress.get("revision_id") or not contract.get("contract_id"):
+  47:         raise CommercialBoundaryError("Missing immutable source identifiers")
+  48:     if progress.get("contract_id") != contract.get("contract_id"):
+  49:         raise CommercialBoundaryError("Contract reference mismatch")
+  50:     if progress.get("work_package_id") != contract.get("work_package_id"):
+  51:         raise CommercialBoundaryError("Work package mismatch")
+  52:     unit = progress.get("unit")
+  53:     if not unit or unit != contract.get("unit"):
+  54:         raise CommercialBoundaryError("Quantity unit mismatch")
+  55:     published_qty = _quantity(progress.get("qa_accepted_quantity"))
+  56:     verified_qty = _quantity(progress.get("independently_verified_quantity"))
+  57:     contracted_qty = _quantity(contract.get("approved_quantity"))
+  58:     previously_certified = _quantity(contract.get("previously_certified_quantity"))
+  59:     if not (published_qty <= verified_qty <= contracted_qty):
+  60:         raise CommercialBoundaryError("Quantity authority hierarchy violated")
+  61:     if previously_certified > published_qty:
+  62:         raise CommercialBoundaryError("Already certified quantity exceeds accepted quantity")
+  63:     remaining = published_qty - previously_certified
+  64:     return {
+  65:         "status": "REVIEW_CANDIDATE_ONLY",
+  66:         "organization_id": organization_id,
+  67:         "project_id": project_id,
+  68:         "snapshot_id": progress["snapshot_id"],
+  69:         "revision_id": progress["revision_id"],
+  70:         "contract_id": contract["contract_id"],
+  71:         "work_package_id": progress["work_package_id"],
+  72:         "unit": unit,
+  73:         "maximum_reviewable_quantity": str(remaining),
+  74:         "billing_certified": False,
+  75:         "invoice_created": False,
+  76:         "finance_posted": False,
+  77:         "warning": "Requires commercial officer certification, reconciliation and authoritative Contract/Finance posting",
+  78:     }
+  79: 
+  80: 
+  81: def command_center_progress_view(*, snapshot, organization_id, project_id,
+  82:                                  authorized, server_revalidated):
+  83:     """Conservative read-only dashboard projection; no billing or earning inference."""
+  84:     if authorized is not True or server_revalidated is not True:
+  85:         raise CommercialBoundaryError("Unauthorized dashboard readback")
+  86:     if not isinstance(snapshot, dict) or (snapshot.get("organization_id"),snapshot.get("project_id")) != (organization_id, project_id):
+  87:         raise CommercialBoundaryError("Invalid dashboard scope")
+  88:     if snapshot.get("server_authorized") is not True:
+  89:         raise CommercialBoundaryError("Untrusted dashboard source")
+  90:     state = snapshot.get("status")
+  91:     if state not in ("Draft", "Pending", "Approved", "Published", "Rejected", "Superseded"):
+  92:         raise CommercialBoundaryError("Unknown publication status")
+  93:     measures = snapshot.get("measures")
+  94:     if not isinstance(measures, dict):
+  95:         raise CommercialBoundaryError("Measures missing")

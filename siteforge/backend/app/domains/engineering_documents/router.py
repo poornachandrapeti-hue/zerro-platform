@@ -27,6 +27,7 @@ from .models import (
 from .schemas import (
     CancelIn,
     CommentClose,
+    DeleteIn,
     DisciplineIn,
     CommentIn,
     CommentRespond,
@@ -50,6 +51,7 @@ from .workflow import (
     close_comment,
     create_drawing,
     create_transmittal,
+    delete_drawing,
     detail,
     drawing_recipients,
     visible_transmittals,
@@ -512,6 +514,31 @@ def cancel(
     commit(db)
     db.refresh(row)
     return detail(db, u, found, row)
+
+
+@router.post("/projects/{pid}/drawings/{did}/delete")
+def delete(
+    pid: int,
+    did: int,
+    data: DeleteIn,
+    u: User = Depends(authenticated),
+    db: Session = Depends(get_db),
+):
+    found = project(db, u, pid)
+    row = _drawing(db, u, found, did, include_deleted=True)
+    delete_drawing(db, u, found, row, data.reason, data.version)
+    db.refresh(row)
+    audit(
+        db,
+        u,
+        "delete",
+        "drawings",
+        did,
+        {"number": row.number, "reason": row.deletion_reason, "deleted_at": row.deleted_at.isoformat()},
+        project_id=pid,
+    )
+    commit(db)
+    return {"ok": True, "id": did}
 
 
 @router.post("/projects/{pid}/drawings/{did}/links", status_code=201)

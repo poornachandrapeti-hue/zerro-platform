@@ -90,6 +90,10 @@ def bucket_for(drawing, latest):
 
 
 TECHNICAL = {"drawings.review", "drawings.release", "drawings.client_review"}
+DELETE = "engineering.drawings.delete"
+# Never implied by organization administration, editing or authorship: a project membership must grant it.
+EXPLICIT = TECHNICAL | {DELETE}
+DELETED = "Deleted"
 
 
 def _membership_allows(db, user, project, action, discipline_id=None):
@@ -115,7 +119,7 @@ def _membership_allows(db, user, project, action, discipline_id=None):
 
 
 def _can(db, user, project, action, discipline_id=None):
-    if action in TECHNICAL:
+    if action in EXPLICIT:
         return _membership_allows(db, user, project, action, discipline_id)
     try:
         permitted(db, user, project, action, discipline_id)
@@ -136,14 +140,17 @@ def sees_unreleased(db, user, project):
             "drawings.release",
             "transmittals.issue",
             "drawings.plan",
+            DELETE,
         )
     )
 
 
 def _require(db, user, project, action, discipline_id=None):
+    if action == DELETE and not _membership_allows(db, user, project, action, discipline_id):
+        raise HTTPException(403, "Deleting drawings needs an explicit project grant from an administrator")
     if action in TECHNICAL and not _membership_allows(db, user, project, action, discipline_id):
         raise HTTPException(403, "Technical approval is a separate permission")
-    if action in TECHNICAL:
+    if action in EXPLICIT:
         return
     permitted(db, user, project, action, discipline_id)
 
@@ -157,9 +164,11 @@ def _released_revision(db, drawing_id):
     )
 
 
-def _drawing(db, user, project, drawing_id):
+def _drawing(db, user, project, drawing_id, include_deleted=False):
     row = db.get(Drawing, drawing_id)
     if not row or row.project_id != project.id:
+        raise HTTPException(404, "Drawing not found")
+    if row.record_status == DELETED and not include_deleted:
         raise HTTPException(404, "Drawing not found")
     _require(db, user, project, "drawings.view", row.discipline_id)
     if not sees_unreleased(db, user, project) and not _released_revision(db, row.id):
@@ -294,8 +303,9 @@ def create_drawing(db, user, project, data):
     _apply_category(db, data)
     number = data.number.strip()
     key = number.casefold()
-    if db.query(Drawing).filter_by(project_id=project.id, number_key=key).first():
-        raise HTTPException(409, "Drawing number already exists in this project")
+    taken = db.query(Drawing).filter_by(project_id=project.id, number_key=key).first()
+    if taken:
+        raise HTTPException(409, _number_taken(taken))
     row = Drawing(
         organization_id=user.organization_id,
         project_id=project.id,
@@ -322,6 +332,12 @@ def create_drawing(db, user, project, data):
     db.add(row)
     db.flush()
     return row
+
+
+def _number_taken(existing):
+    if existing.record_status == DELETED:
+        return "Drawing number already exists in this project as a deleted drawing. Deleted drawing numbers are retained and cannot be reused"
+    return "Drawing number already exists in this project"
 
 
 def _check_refs(db, user, project, data):
@@ -372,7 +388,7 @@ def edit_drawing(db, user, project, drawing, data):
         raise HTTPException(409, "Drawing number is fixed once a revision exists")
     taken = db.query(Drawing).filter_by(project_id=project.id, number_key=key).first()
     if taken and taken.id != drawing.id:
-        raise HTTPException(409, "Drawing number already exists in this project")
+        raise HTTPException(409, _number_taken(taken))
     _bump(
         db,
         Drawing,
@@ -441,8 +457,16 @@ def add_revision(db, user, project, drawing, code, upload, description="", purpo
         created_by=user.id,
     )
     db.add(revision)
-    drawing.preparation = "Prepared"
     db.flush()
+    prepared = db.execute(
+        update(Drawing)
+        .where(Drawing.id == drawing.id, Drawing.record_status != DELETED)
+        .values(preparation="Prepared")
+        .execution_options(synchronize_session=False)
+    )
+    if prepared.rowcount != 1:
+        raise HTTPException(409, "This drawing was deleted. Reload the register")
+    drawing.preparation = "Prepared"
     _event(db, user, drawing, revision, "prepared")
     return revision
 
@@ -1033,6 +1057,8 @@ def _import_one(db, user, project, raw, mode="create", location_mappings=None):
         .first()
     )
     if existing:
+        if existing.record_status == DELETED:
+            raise HTTPException(409, _number_taken(existing))
         if mode != "update":
             same = (
                 existing.title == title
@@ -1139,7 +1165,7 @@ def link_wrench(db, user, project, drawing, data):
 
 def scan_overdue(db, today=None):
     today = today or datetime.now(timezone.utc).date()
-    drawings = db.query(Drawing).all()
+    drawings = db.query(Drawing).filter(Drawing.record_status != DELETED).all()
     for drawing in drawings:
         project = db.get(Project, drawing.project_id)
         latest = _latest(db, drawing.id)
@@ -1345,7 +1371,7 @@ def filtered_drawings(
     record_status="Active",
     date_kind="planned_preparation",
 ):
-    query = db.query(Drawing).filter_by(project_id=project.id)
+    query = db.query(Drawing).filter_by(project_id=project.id).filter(Drawing.record_status != DELETED)
     if record_status and record_status != "All":
         query = query.filter_by(record_status=record_status)
     if discipline_id:
@@ -1628,6 +1654,12 @@ def public_revision(db, user, project, drawing, revision):
 
 def drawing_actions(db, user, project, drawing, latest):
     actions = []
+    if (
+        _can(db, user, project, DELETE, drawing.discipline_id)
+        and (user.organization_admin or user.company_id == drawing.company_id)
+        and deletion_blocker(db, drawing) is None
+    ):
+        actions.append("delete")
     if not _can(db, user, project, "drawings.edit", drawing.discipline_id):
         return actions
     if user.organization_admin or user.company_id == drawing.company_id:
@@ -1785,6 +1817,67 @@ def cancel_drawing(db, user, project, drawing, reason, version):
     )
 
 
+def deletion_blocker(db, drawing):
+    if drawing.record_status == DELETED:
+        return "This drawing is already deleted"
+    if drawing.record_status != "Active":
+        return f"Only draft drawings can be deleted. This drawing is {drawing.record_status.lower()}"
+    revisions = db.query(DrawingRevision).filter_by(drawing_id=drawing.id).all()
+    if any(row.release_state in {"Released", "Superseded", "Withdrawn"} for row in revisions):
+        return "Issued or superseded drawings cannot be deleted"
+    if any(
+        row.review_state in {"Accepted", "Accepted with Comments"} or (row.client_outcome or "").startswith("Approved")
+        for row in revisions
+    ):
+        return "Approved drawings cannot be deleted"
+    if any(row.review_state != "Not Submitted" for row in revisions):
+        return "Submitted drawings cannot be deleted"
+    if revisions or db.query(RevisionEvent).filter_by(drawing_id=drawing.id).first():
+        return "This drawing has revisions. Its revision history must be preserved, so it cannot be deleted"
+    if (
+        db.query(DrawingLink)
+        .filter((DrawingLink.drawing_id == drawing.id) | (DrawingLink.related_id == drawing.id))
+        .first()
+    ):
+        return "This drawing is linked to other drawings and cannot be deleted"
+    if db.query(WrenchLink).filter_by(drawing_id=drawing.id).first():
+        return "This drawing is linked to an external document system and cannot be deleted"
+    from app.domains.supply_chain.models import MaterialRequirement
+    from .models import MaterialTakeoff
+
+    if db.query(MaterialTakeoff).filter_by(drawing_id=drawing.id).first():
+        return "This drawing has material take-offs and cannot be deleted"
+    if db.query(MaterialRequirement).filter_by(drawing_id=drawing.id).first():
+        return "This drawing is referenced by a material requirement and cannot be deleted"
+    return None
+
+
+def delete_drawing(db, user, project, drawing, reason, version):
+    _require(db, user, project, DELETE, drawing.discipline_id)
+    _same_company(user, drawing)
+    if not reason.strip():
+        raise HTTPException(422, "A deletion reason is required")
+    # Row lock serialises against a concurrent revision upload, which updates the same drawing row.
+    drawing = (
+        db.query(Drawing).filter_by(id=drawing.id).populate_existing().with_for_update().one()
+    )
+    blocker = deletion_blocker(db, drawing)
+    if blocker:
+        raise HTTPException(409, blocker)
+    _bump(
+        db,
+        Drawing,
+        drawing.id,
+        version,
+        {
+            "record_status": DELETED,
+            "deleted_at": datetime.now(timezone.utc),
+            "deleted_by": user.id,
+            "deletion_reason": reason.strip(),
+        },
+    )
+
+
 def link_drawing(db, user, project, drawing, related_id):
     _require(db, user, project, "drawings.edit", drawing.discipline_id)
     related = db.get(Drawing, related_id)
@@ -1792,6 +1885,7 @@ def link_drawing(db, user, project, drawing, related_id):
         not related
         or related.project_id != project.id
         or related.organization_id != drawing.organization_id
+        or related.record_status == DELETED
     ):
         raise HTTPException(422, "Related drawing must belong to this project")
     if related.id == drawing.id:

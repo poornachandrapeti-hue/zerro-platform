@@ -1,0 +1,399 @@
+﻿===== tests\test_quality.py =====
+ 920:         "quantity": quantity,
+ 921:         "batch_number": "B-1",
+ 922:         "heat_number": "H-1",
+ 923:         "serial_number": "",
+ 924:     }
+ 925: 
+ 926: 
+ 927: def test_material_inspection_splits_a_receipt_without_accepting_installation(env):
+ 928:     from decimal import Decimal
+ 929: 
+ 930:     c, maker = env
+ 931:     sign_in(c)
+ 932:     me = c.get("/api/auth/me").json()["user"]
+ 933:     catalog = c.get("/api/catalog").json()
+ 934:     civil = next(row["id"] for row in catalog["disciplines"] if row["name"] == "Civil")
+ 935:     roles = {row["name"]: row["id"] for row in catalog["roles"]}
+ 936:     created = new_project(
+ 937:         c,
+ 938:         code="MAT-1",
+ 939:         client_company_id=me["company_id"],
+ 940:         discipline_ids=[civil],
+ 941:         disciplines=[{"discipline_id": civil, "scope_description": "Civil", "active": True}],
+ 942:     )
+ 943:     assert created.status_code == 201, created.text
+ 944:     pid = created.json()["id"]
+ 945:     qa = _user(c, "qa.mat@alpha.test", "Qa Mat", me["company_id"])
+ 946:     reviewer = _user(c, "rev.mat@alpha.test", "Rev Mat", me["company_id"])
+ 947:     outsider = _user(c, "out.mat@alpha.test", "Out Mat", me["company_id"])
+ 948:     with maker() as db:
+ 949:         from app.domains.identity_projects.models import User
+ 950: 
+ 951:         viewer_id = db.query(User).filter_by(email="viewer@alpha.test").one().id
+ 952:     for user_id, role in ((viewer_id, "Site Engineer"), (qa, "QA/QC"), (reviewer, "Discipline Head"), (me["id"], "Project Manager")):
+ 953:         assert (
+ 954:             c.post(
+ 955:                 f"/api/projects/{pid}/memberships",
+ 956:                 json={
+ 957:                     "user_id": user_id,
+ 958:                     "role_id": roles[role],
+ 959:                     "company_id": me["company_id"],
+ 960:                     "scope": "ALL",
+ 961:                     "discipline_ids": [],
+ 962:                 },
+ 963:             ).status_code
+ 964:             == 201
+ 965:         )
+ 966:     with maker() as db:
+ 967:         receipt_id, line_id, item_id = _posted_receipt(db, pid, me["id"], me["company_id"], civil, "GR-MAT", "10")
+ 968:         cancelled_id, cancelled_line, _item = _posted_receipt(
+ 969:             db, pid, me["id"], me["company_id"], civil, "GR-CANCEL", "1", "Cancelled"
+ 970:         )
+ 971:     sign_in(c, "viewer@alpha.test")
+ 972:     denied = c.post(
+ 973:         f"/api/projects/{pid}/quality/materials",
+ 974:         json={
+ 975:             "number": "MI-NO",
+ 976:             "goods_receipt_id": receipt_id,
+ 977:             "inspector_id": qa,
+ 978:             "requested_on": "2026-12-02",
+ 979:             "lines": [_move(line_id, "Pending", "Accepted", "1")],
+ 980:         },
+ 981:     )
+ 982:     assert denied.status_code == 403, denied.text
+ 983:     sign_in(c)
+ 984:     warehouse = c.post(
+ 985:         f"/api/projects/{pid}/procurement/warehouses",
+ 986:         json={"code": "WH-MAT", "name": "Site store", "officer_id": me["id"]},
+ 987:     )
+ 988:     assert warehouse.status_code == 201, warehouse.text
+ 989:     early_stock = c.post(
+ 990:         f"/api/projects/{pid}/procurement/stock/acceptances",
+ 991:         json={
+ 992:             "number": "ACC-EARLY",
+ 993:             "warehouse_id": warehouse.json()["id"],
+ 994:             "goods_receipt_id": receipt_id,
+ 995:             "lines": [{"goods_receipt_line_id": line_id, "quantity": "1"}],
+ 996:         },
+ 997:     )
+ 998:     assert early_stock.status_code == 422, early_stock.text
+ 999:     assert "quality has accepted" in early_stock.text
+1000:     sign_in(c, "qa.mat@alpha.test")
+1001:     cancelled = c.post(
+1002:         f"/api/projects/{pid}/quality/materials",
+1003:         json={
+1004:             "number": "MI-CANCEL",
+1005:             "goods_receipt_id": cancelled_id,
+1006:             "inspector_id": qa,
+1007:             "requested_on": "2026-12-02",
+1008:             "lines": [_move(cancelled_line, "Pending", "Accepted", "1")],
+1009:         },
+1010:     )
+1011:     assert cancelled.status_code == 422, cancelled.text
+1012:     assert "posted goods receipt" in cancelled.text
+1013:     kept = c.post(
+1014:         f"/api/projects/{pid}/quality/materials",
+1015:         json={
+1016:             "number": "MI-KEEP",
+1017:             "goods_receipt_id": receipt_id,
+1018:             "inspector_id": qa,
+1019:             "requested_on": "2026-12-02",
+1020:             "lines": [_move(line_id, "Accepted", "Rejected", "1")],
+1021:         },
+1022:     )
+1023:     assert kept.status_code == 422, kept.text
+1024:     assert "stays on record" in kept.text
+1025:     over = c.post(
+1026:         f"/api/projects/{pid}/quality/materials",
+1027:         json={
+1028:             "number": "MI-OVER",
+1029:             "goods_receipt_id": receipt_id,
+1030:             "inspector_id": qa,
+1031:             "requested_on": "2026-12-02",
+1032:             "lines": [_move(line_id, "Pending", "Accepted", "11")],
+1033:         },
+1034:     )
+1035:     assert over.status_code == 422, over.text
+1036:     assert "still pending" in over.text
+1037:     draft = c.post(
+1038:         f"/api/projects/{pid}/quality/materials",
+1039:         json={
+1040:             "number": "MI-SELF",
+1041:             "goods_receipt_id": receipt_id,
+1042:             "inspector_id": qa,
+1043:             "requested_on": "2026-12-02",
+1044:             "certificate_reference": "MTC-1",
+1045:             "findings": "Heat number is on the certificate",
+1046:             "lines": [_move(line_id, "Pending", "Accepted", "1")],
+1047:         },
+1048:     )
+1049:     assert draft.status_code == 201, draft.text
+1050:     assert "does not accept the installation" in draft.json()["statement"]
+===== tests\test_quality.py =====
+1170:     )
+1171:     assert follow_ok.status_code == 200, follow_ok.text
+1172:     sign_in(c)
+1173:     final = c.get(f"/api/projects/{pid}/quality/materials").json()
+1174:     done = next(row for row in final["receipts"] if row["id"] == receipt_id)["lines"][0]
+1175:     assert done["pending"] == "0.000"
+1176:     assert done["accepted"] == "7.000"
+1177:     assert done["rejected"] == "3.000"
+1178:     assert done["quarantined"] == "0.000"
+1179:     too_much = c.post(
+1180:         f"/api/projects/{pid}/procurement/stock/acceptances",
+1181:         json={
+1182:             "number": "ACC-MAT",
+1183:             "warehouse_id": warehouse.json()["id"],
+1184:             "goods_receipt_id": receipt_id,
+1185:             "lines": [{"goods_receipt_line_id": line_id, "quantity": "8"}],
+1186:         },
+1187:     )
+1188:     assert too_much.status_code == 422, too_much.text
+1189:     assert "quality has accepted" in too_much.text
+1190:     # A Quality-module approval alone does not authorize the independent
+1191:     # Stores QA case. Fail closed rather than bypassing QA revocation controls.
+1192:     stocked = c.post(
+1193:         f"/api/projects/{pid}/procurement/stock/acceptances",
+1194:         json={
+1195:             "number": "ACC-MAT",
+1196:             "warehouse_id": warehouse.json()["id"],
+1197:             "goods_receipt_id": receipt_id,
+1198:             "lines": [{"goods_receipt_line_id": line_id, "quantity": "7"}],
+1199:         },
+1200:     )
+1201:     assert stocked.status_code == 422, stocked.text
+1202:     assert "quality has accepted" in stocked.text
+1203: 
+1204:     # With no QA-authorized stock posting, item-level issues must also fail.
+1205:     blocked_issue = c.post(
+1206:         f"/api/projects/{pid}/procurement/stock/issues",
+1207:         json={
+1208:             "number": "ISS-MAT",
+1209:             "warehouse_id": warehouse.json()["id"],
+1210:             "reason": "Site issue",
+1211:             "recipient": "Civil crew",
+1212:             "lines": [{"item_id": item_id, "quantity": "7"}],
+1213:         },
+1214:     )
+1215:     assert blocked_issue.status_code == 409, blocked_issue.text
+1216:     assert "QA-certified stock source is unavailable" in blocked_issue.text
+1217: 
+1218:     # Real API handoff: approved Quality dispositions authorize an untouched
+1219:     # Stores inspection case, but never post stock or release mixed lots.
+1220:     handoff_url = (
+1221:         f"/api/projects/{pid}/stores/inspection-cases/"
+1222:         f"from-quality/{line_id}/reconcile"
+1223:     )
+1224:     transferred = c.post(handoff_url, params={"expected_version": 1})
+1225:     assert transferred.status_code == 200, transferred.text
+1226:     snapshot = transferred.json()
+1227:     assert Decimal(snapshot["accepted_qty"]) == Decimal("7")
+1228:     assert Decimal(snapshot["rejected_qty"]) == Decimal("3")
+1229:     assert Decimal(snapshot["quarantined_qty"]) == Decimal("0")
+1230:     assert Decimal(snapshot["pending_qty"]) == Decimal("0")
+1231:     assert snapshot["stock_posted"] is False
+1232:     assert snapshot["lot_release_enabled"] is False
+1233: 
+1234:     # Repeating with a stale expected version must not double-authorize QA.
+1235:     replay = c.post(handoff_url, params={"expected_version": 1})
+1236:     assert replay.status_code == 409, replay.text
+1237: 
+1238:     # Posting beyond Quality acceptance remains forbidden after the handoff.
+1239:     still_too_much = c.post(
+1240:         f"/api/projects/{pid}/procurement/stock/acceptances",
+1241:         json={
+1242:             "number": "ACC-MAT-OVER",
+1243:             "warehouse_id": warehouse.json()["id"],
+1244:             "goods_receipt_id": receipt_id,
+1245:             "lines": [{"goods_receipt_line_id": line_id, "quantity": "8"}],
+1246:         },
+1247:     )
+1248:     assert still_too_much.status_code == 422, still_too_much.text
+1249: 
+1250:     authorized_stock = c.post(
+1251:         f"/api/projects/{pid}/procurement/stock/acceptances",
+1252:         json={
+1253:             "number": "ACC-MAT",
+1254:             "warehouse_id": warehouse.json()["id"],
+1255:             "goods_receipt_id": receipt_id,
+1256:             "lines": [{"goods_receipt_line_id": line_id, "quantity": "7"}],
+1257:         },
+1258:     )
+1259:     assert authorized_stock.status_code == 201, authorized_stock.text
+1260: 
+===== app\domains\stores_inventory\router.py =====
+ 790:         work_package_id=data.work_package_id, planning_wbs_id=data.planning_wbs_id,
+ 791:         action_key=data.action_key, reason=data.reason)
+ 792:     commit(db)
+ 793:     return result
+ 794: 
+ 795: 
+ 796: @router.post("/inspection-cases/from-quality/{receipt_line_id}/reconcile")
+ 797: def reconcile_approved_quality_case(
+ 798:     pid: int,
+ 799:     receipt_line_id: int,
+ 800:     expected_version: int = 1,
+ 801:     u: User = Depends(authenticated),
+ 802:     db: Session = Depends(get_db),
+ 803: ):
+ 804:     """One-time, explicit QA handoff. Never releases, posts, or issues inventory.
+ 805: 
+ 806:     Fail closed for revoked/previously decided cases. Subsequent Quality changes
+ 807:     require a separately reviewed reinspection workflow, not silent overwrite.
+ 808:     """
+ 809:     project = qa_access(db, u, pid, edit=True)
+ 810:     from app.domains.quality.material import _totals
+ 811:     from app.domains.quality.models import MaterialInspection
+ 812: 
+ 813:     line = (db.query(GoodsReceiptLine)
+ 814:         .join(GoodsReceipt, GoodsReceipt.id == GoodsReceiptLine.goods_receipt_id)
+ 815:         .filter(GoodsReceiptLine.id == receipt_line_id,
+ 816:                 GoodsReceipt.project_id == pid,
+ 817:                 GoodsReceipt.organization_id == u.organization_id,
+ 818:                 GoodsReceipt.status == "Posted")
+ 819:         .with_for_update().first())
+ 820:     if line is None:
+ 821:         raise HTTPException(404, "Posted goods receipt line not found")
+ 822:     case = (db.query(StoresInspectionCase)
+ 823:         .filter_by(goods_receipt_line_id=receipt_line_id,
+ 824:                    project_id=pid, organization_id=u.organization_id)
+ 825:         .with_for_update().first())
+ 826:     if case and case.status == "Quality Revoked":
+ 827:         raise HTTPException(409, "Revoked QA case requires separately authorized reinspection")
+ 828:     if case and case.version != expected_version:
+ 829:         raise HTTPException(409, "Stores QA case version changed")
+ 830:     if case and db.query(StoresInspectionDecision.id).filter_by(case_id=case.id).first():
+ 831:         raise HTTPException(409, "Existing Stores decisions require manual reconciliation")
+ 832:     if case and any(Decimal(str(getattr(case, key))) != value for key, value in (
+ 833:         ("pending_qty", Decimal(str(line.quantity))),
+ 834:         ("accepted_qty", Decimal(0)),
+ 835:         ("rejected_qty", Decimal(0)),
+ 836:         ("quarantined_qty", Decimal(0)),
+ 837:     )):
+ 838:         raise HTTPException(409, "Stores case already contains dispositions")
+ 839:     if db.query(MaterialInspection.id).filter(
+ 840:         MaterialInspection.goods_receipt_id == line.goods_receipt_id,
+ 841:         MaterialInspection.status.in_(("Draft", "Pending Review", "Returned for Correction"))
+ 842:     ).first():
+ 843:         raise HTTPException(409, "Outstanding Quality inspection prevents handoff")
+ 844:     amounts = _totals(db, receipt_line_id)
+ 845:     received = Decimal(str(line.quantity))
+ 846:     approved = amounts["accepted"] + amounts["rejected"] + amounts["quarantined"]
+ 847:     if approved <= 0 or approved > received or any(q < 0 for q in amounts.values()):
+ 848:         raise HTTPException(409, "No valid approved Quality disposition to reconcile")
+ 849:     if case is None:
+ 850:         case = StoresInspectionCase(
+ 851:             organization_id=u.organization_id, project_id=pid,
+ 852:             goods_receipt_line_id=receipt_line_id, pending_qty=received,
+ 853:             accepted_qty=0, rejected_qty=0, quarantined_qty=0, created_by=u.id,
+ 854:         )
+ 855:         db.add(case)
+ 856:         db.flush()
+ 857:     case.pending_qty = received - approved
+ 858:     case.accepted_qty = amounts["accepted"]
+ 859:     case.rejected_qty = amounts["rejected"]
+ 860:     case.quarantined_qty = amounts["quarantined"]
+ 861:     case.status = "Pending Inspection" if case.pending_qty > 0 else "Disposition Recorded"
+ 862:     case.version += 1
+ 863:     for disposition, quantity in amounts.items():
+ 864:         if quantity <= 0:
+ 865:             continue
+ 866:         db.add(StoresInspectionDecision(
+ 867:             case_id=case.id, disposition=disposition.capitalize(), quantity=quantity,
+ 868:             reason="Explicit reconciliation from approved Quality material inspections",
+ 869:             idempotency_key=f"quality-handoff-{receipt_line_id}-{disposition}",
+ 870:             actor_id=u.id,
+ 871:         ))
+ 872:     audit(db, u, "quality_handoff", "stores_inspection_cases", case.id,
+ 873:           details={"receipt_line_id": receipt_line_id,
+ 874:                    "approved_quality_quantities": {k: str(v) for k, v in amounts.items()},
+ 875:                    "stock_posted": False, "lot_release_enabled": False}, project_id=pid)
+ 876:     commit(db)
+ 877:     return {**inspection_payload(case), "stock_posted": False,
+ 878:             "lot_release_enabled": False,
+ 879:             "warning": "Receipt-line QA reconciliation only; lot attribution and safe stock issue remain gated."}
+===== tests\conftest.py =====
+   1: import os
+   2: 
+   3: os.environ["DATABASE_URL"] = "sqlite://"
+   4: os.environ["ALLOWED_ORIGINS"] = "http://localhost:5173"
+   5: import pytest
+   6: from fastapi.testclient import TestClient
+   7: from sqlalchemy import create_engine, event
+   8: from sqlalchemy.orm import sessionmaker
+   9: from sqlalchemy.pool import StaticPool
+  10: from app.db import Base, get_db
+  11: from app.main import app
+  12: from app.domains.identity_projects.models import (
+  13:     Organization,
+  14:     Company,
+  15:     User,
+  16:     Project,
+  17:     Membership,
+  18:     Role,
+  19: )
+  20: from app.domains.identity_projects.seed import seed
+  21: from app.domains.identity_projects.security import hasher
+  22: from app.domains.identity_projects.router import attempts
+  23: 
+  24: 
+  25: @pytest.fixture
+  26: def env():
+  27:     engine = create_engine(
+  28:         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
+  29:     )
+  30: 
+  31:     @event.listens_for(engine, "connect")
+  32:     def fk_on(connection, _):
+  33:         connection.execute("PRAGMA foreign_keys=ON")
+  34: 
+  35:     Base.metadata.create_all(engine)
+  36:     maker = sessionmaker(engine, expire_on_commit=False)
+  37:     with maker() as db:
+  38:         seed(db)
+  39:         a = Organization(name="Alpha")
+  40:         b = Organization(name="Beta")
+  41:         db.add_all([a, b])
+  42:         db.flush()
+  43:         ca = Company(organization_id=a.id, name="Alpha Co", name_key="alpha co")
+  44:         cb = Company(organization_id=b.id, name="Beta Co", name_key="beta co")
+  45:         db.add_all([ca, cb])
+  46:         db.flush()
+  47:         for email, org, company, admin in [
+  48:             ("admin@alpha.test", a.id, ca.id, True),
+  49:             ("viewer@alpha.test", a.id, ca.id, False),
+  50:             ("admin@beta.test", b.id, cb.id, True),
+  51:         ]:
+  52:             db.add(
+  53:                 User(
+  54:                     organization_id=org,
+  55:                     company_id=company,
+  56:                     email=email,
+  57:                     name=email.split("@")[0],
+  58:                     password_hash=hasher.hash("test-password-123"),
+  59:                     organization_admin=admin,
+  60:                 )
+  61:             )
+  62:         db.commit()
+  63: 
+  64:     def override():
+  65:         with maker() as db:
+  66:             yield db
+  67: 
+  68:     app.dependency_overrides[get_db] = override
+  69:     attempts.clear()
+  70:     with TestClient(app) as client:
+  71:         yield client, maker
+  72:     app.dependency_overrides.clear()
+  73:     engine.dispose()
+  74: 
+  75: 
+  76: def sign_in(client, email="admin@alpha.test"):
+  77:     client.headers["Origin"] = "http://localhost:5173"
+  78:     response = client.post(
+  79:         "/api/auth/login", json={"email": email, "password": "test-password-123"}
+  80:     )
+  81:     assert response.status_code == 200, response.text
+  82:     client.headers["X-CSRF-Token"] = response.json()["csrf_token"]
+  83:     return response
