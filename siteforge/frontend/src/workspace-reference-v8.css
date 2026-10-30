@@ -36,8 +36,8 @@
     box-shadow:none !important; color:#153767 !important;
   }
   .shell.shell-home:has(.ref-dashboard) > aside nav button svg, .shell.shell-home:has(.ref-partner) > aside nav button svg {width:20px !important;height:20px !important;flex:none !important;color:#163f83 !important}
-  .shell.shell-home:has(.ref-dashboard) > aside nav button.active, .shell.shell-home:has(.ref-partner) > aside nav button.active {background:#096cf1 !important;color:white !important;border-radius:7px !important}
-  .shell.shell-home:has(.ref-dashboard) > aside nav button.active svg, .shell.shell-home:has(.ref-partner) > aside nav button.active svg {color:white !important}
+  .shell.shell-home:has(.ref-dashboard) > aside nav button.active, .shell.shell-home:has(.ref-partner) > aside nav button.active {background:#d9ebfb !important;color:#123761 !important;border-radius:7px !important;border:1px solid #b7d4ef !important}
+  .shell.shell-home:has(.ref-dashboard) > aside nav button.active svg, .shell.shell-home:has(.ref-partner) > aside nav button.active svg {color:#1968c9 !important}
   .shell.shell-home:has(.ref-dashboard) > main, .shell.shell-home:has(.ref-partner) > main {
     grid-column:2 !important; grid-row:1 / 3 !important; height:100% !important; width:100% !important;
     min-width:0 !important; min-height:0 !important; margin:0 !important;

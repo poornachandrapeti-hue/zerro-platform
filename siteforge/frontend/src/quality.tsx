@@ -403,7 +403,7 @@ function QualityBoard({ pid, session }: { pid: number; session: Session }) {
       {tab === "Plans & ITPs" ? <PlansPanel pid={pid} canPlan={canPlan} admin={admin} /> : null}
       {tab === "Templates" ? <TemplatesPanel pid={pid} canPlan={canPlan} admin={admin} /> : null}
       {tab === "Requests" ? <RequestsPanel pid={pid} canRequest={canRequest} admin={admin} /> : null}
-      {tab === "Material" ? <MaterialPanel pid={pid} canPlan={canPlan} admin={admin} /> : null}
+      {tab === "Material" ? <MaterialPanel pid={pid} session={session} canPlan={canPlan} admin={admin} /> : null}
       {tab === "NCRs" ? <NcrPanel pid={pid} canPlan={canPlan} canRequest={canRequest} admin={admin} /> : null}
       {tab === "Holds" ? <HoldsPanel pid={pid} canPlan={canPlan} canRequest={canRequest} admin={admin} /> : null}
       {tab === "Offers" ? (
@@ -1088,9 +1088,20 @@ function Split({ line }: { line: BalanceLine }) {
   );
 }
 
-function MaterialPanel({ pid, canPlan, admin }: { pid: number; canPlan: boolean; admin: boolean }) {
+function MaterialPanel({
+  pid,
+  session,
+  canPlan,
+  admin,
+}: {
+  pid: number;
+  session: Session;
+  canPlan: boolean;
+  admin: boolean;
+}) {
   const [register, setRegister] = useState<MaterialRegister | null>(null);
   const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
   const [number, setNumber] = useState("");
   const [receiptId, setReceiptId] = useState("");
   const [inspectorId, setInspectorId] = useState("");
@@ -1098,6 +1109,13 @@ function MaterialPanel({ pid, canPlan, admin }: { pid: number; canPlan: boolean;
   const [certificate, setCertificate] = useState("");
   const [findings, setFindings] = useState("");
   const [moves, setMoves] = useState<DraftMove[]>([]);
+  const [handoffBusy, setHandoffBusy] = useState<number | null>(null);
+  const [handedOff, setHandedOff] = useState<number[]>([]);
+  const canHandoff =
+    admin ||
+    session.memberships.some(
+      (item) => item.project_id === pid && item.permissions?.includes("stores.quality_handoff.approve"),
+    );
   async function load() {
     const next = await api<MaterialRegister>(`/projects/${pid}/quality/materials`);
     setRegister(next);
@@ -1106,6 +1124,33 @@ function MaterialPanel({ pid, canPlan, admin }: { pid: number; canPlan: boolean;
   useEffect(() => {
     void load().catch((err) => setError((err as Error).message));
   }, [pid]);
+  async function handoffLine(line: BalanceLine) {
+    if (handoffBusy != null || handedOff.includes(line.id)) return;
+    setError("");
+    setNotice("");
+    setHandoffBusy(line.id);
+    try {
+      const result = await api<{ accepted_qty: string; rejected_qty: string; quarantined_qty: string }>(
+        `/projects/${pid}/stores/inspection-cases/from-quality/${line.id}/reconcile?expected_version=1`,
+        "POST",
+      );
+      setHandedOff((ids) => (ids.includes(line.id) ? ids : [...ids, line.id]));
+      setNotice(
+        `Handoff done for ${line.item_code}: accepted ${result.accepted_qty}, rejected ${result.rejected_qty}, quarantined ${result.quarantined_qty}. Next: Procurement → Stock → Accept.`,
+      );
+      await load();
+    } catch (err) {
+      const message = (err as Error).message;
+      if (/Existing Stores decisions/i.test(message)) {
+        setHandedOff((ids) => (ids.includes(line.id) ? ids : [...ids, line.id]));
+        setNotice(`Already handed off for ${line.item_code}. Next: Procurement → Stock → Accept.`);
+      } else {
+        setError(message);
+      }
+    } finally {
+      setHandoffBusy(null);
+    }
+  }
   function chooseReceipt(value: string) {
     setReceiptId(value);
     const receipt = register?.receipts.find((row) => String(row.id) === value);
@@ -1176,7 +1221,9 @@ function MaterialPanel({ pid, canPlan, admin }: { pid: number; canPlan: boolean;
     <>
       <QualityRoutes pid={pid} admin={admin} routes={MATERIAL_ROUTES} />
       <p>{register?.note}</p>
+      <p className="muted">After an inspection is Approved, use Handoff to Stores on each receipt line (GR should have a warehouse), then Accept stock under Procurement → Stock.</p>
       <Err text={error} />
+      {notice ? <p className="note-card note-good" role="status">{notice}</p> : null}
       {canPlan ? (
         <form className="contact-form" onSubmit={(event) => void create(event)}>
           <h3 className="section-mark wide">
@@ -1272,12 +1319,34 @@ function MaterialPanel({ pid, canPlan, admin }: { pid: number; canPlan: boolean;
               <strong><PackageCheck size={15} /> {row.number}</strong>
               <span className={statusChip(row.status)}>{row.status}</span>
             </header>
-            {row.lines.map((line) => (
-              <div key={line.id}>
-                <p>{line.item_code} · received {line.received} {line.unit}</p>
-                <Split line={line} />
-              </div>
-            ))}
+            {row.lines.map((line) => {
+              const decided =
+                Number(line.accepted || 0) + Number(line.rejected || 0) + Number(line.quarantined || 0);
+              const done = handedOff.includes(line.id);
+              return (
+                <div key={line.id}>
+                  <p>{line.item_code} · received {line.received} {line.unit}</p>
+                  <Split line={line} />
+                  {canHandoff && decided > 0 ? (
+                    done ? (
+                      <p className="note-card note-good">Handed off to Stores · go to Procurement → Stock → Accept</p>
+                    ) : (
+                      <button
+                        className="primary"
+                        type="button"
+                        disabled={handoffBusy === line.id}
+                        onClick={() => void handoffLine(line)}
+                      >
+                        <Send size={15} /> {handoffBusy === line.id ? "Handing off…" : "Handoff to Stores"}
+                      </button>
+                    )
+                  ) : null}
+                  {!canHandoff && decided > 0 ? (
+                    <p className="muted">Handoff needs stores.quality_handoff.approve (QA/QC or Project Manager).</p>
+                  ) : null}
+                </div>
+              );
+            })}
           </article>
         ))}
         {register?.inspections.map((row) => (

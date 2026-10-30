@@ -32,16 +32,30 @@ class ProcurementItem(Base):
     description: Mapped[str] = mapped_column(String(300))
     item_type: Mapped[str] = mapped_column(String(20))
     category: Mapped[str] = mapped_column(String(120))
+    subcategory: Mapped[str] = mapped_column(String(120), default="")
     discipline_ids: Mapped[list] = mapped_column(JSON, default=list)
     specification: Mapped[str] = mapped_column(Text, default="")
     approval_status: Mapped[str] = mapped_column(String(24), default="Draft")
     submitted_by: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     specification_attributes: Mapped[dict] = mapped_column(JSON, default=dict)
     size_rating: Mapped[str] = mapped_column(String(120), default="")
+    material_grade: Mapped[str] = mapped_column(String(120), default="")
+    applicable_standard: Mapped[str] = mapped_column(String(200), default="")
     base_unit: Mapped[str] = mapped_column(String(20))
+    purchase_unit: Mapped[str] = mapped_column(String(20), default="")
+    issue_unit: Mapped[str] = mapped_column(String(20), default="")
     approved_make: Mapped[str] = mapped_column(String(200), default="")
+    model_number: Mapped[str] = mapped_column(String(120), default="")
+    manufacturer_part_number: Mapped[str] = mapped_column(String(120), default="")
+    hsn_code: Mapped[str] = mapped_column(String(20), default="")
     inspection_required: Mapped[bool] = mapped_column(Boolean, default=False)
     tracking_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    mtc_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    calibration_certificate_required: Mapped[bool] = mapped_column(Boolean, default=False)
+    shelf_life_applicable: Mapped[bool] = mapped_column(Boolean, default=False)
+    shelf_life_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    preferred_vendor_id: Mapped[int | None] = mapped_column(ForeignKey("procurement_vendors.id"), nullable=True)
+    specification_template_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
@@ -107,6 +121,106 @@ class CatalogueSpecificationTemplate(Base):
     category: Mapped[str] = mapped_column(String(120))
     fields: Mapped[list] = mapped_column(JSON, default=list)
     version: Mapped[int] = mapped_column(Integer, default=1)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueCategory(Base):
+    """Organization category master by discipline name. Reuses global Discipline names."""
+    __tablename__ = "procurement_catalogue_categories"
+    __table_args__ = (UniqueConstraint("organization_id", "discipline", "name_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    discipline: Mapped[str] = mapped_column(String(100))
+    name: Mapped[str] = mapped_column(String(120))
+    name_key: Mapped[str] = mapped_column(String(120))
+    qa_document_types: Mapped[list] = mapped_column(JSON, default=list)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueSubcategory(Base):
+    __tablename__ = "procurement_catalogue_subcategories"
+    __table_args__ = (UniqueConstraint("organization_id", "category_id", "name_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("procurement_catalogue_categories.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    name_key: Mapped[str] = mapped_column(String(120))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueUom(Base):
+    """Standardized UOM codes. Conversions remain in procurement_conversions."""
+    __tablename__ = "procurement_uoms"
+    __table_args__ = (UniqueConstraint("organization_id", "code_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    code: Mapped[str] = mapped_column(String(20))
+    code_key: Mapped[str] = mapped_column(String(20))
+    name: Mapped[str] = mapped_column(String(80), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueMaterialGrade(Base):
+    __tablename__ = "procurement_material_grades"
+    __table_args__ = (UniqueConstraint("organization_id", "code_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    code: Mapped[str] = mapped_column(String(80))
+    code_key: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(120), default="")
+    discipline: Mapped[str] = mapped_column(String(100), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueStandard(Base):
+    __tablename__ = "procurement_standards"
+    __table_args__ = (UniqueConstraint("organization_id", "code_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    code: Mapped[str] = mapped_column(String(80))
+    code_key: Mapped[str] = mapped_column(String(80))
+    title: Mapped[str] = mapped_column(String(200), default="")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueManufacturer(Base):
+    __tablename__ = "procurement_manufacturers"
+    __table_args__ = (UniqueConstraint("organization_id", "code_key"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    code: Mapped[str] = mapped_column(String(80))
+    code_key: Mapped[str] = mapped_column(String(80))
+    name: Mapped[str] = mapped_column(String(200))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)
+
+
+class CatalogueApprovalConfig(Base):
+    """Organization catalogue approval workflow settings. Does not replace RBAC permissions."""
+    __tablename__ = "procurement_catalogue_approval_config"
+    __table_args__ = (UniqueConstraint("organization_id"),)
+    id: Mapped[int] = mapped_column(primary_key=True)
+    organization_id: Mapped[int] = mapped_column(ForeignKey("organizations.id"), index=True)
+    stages: Mapped[list] = mapped_column(JSON, default=list)
+    submitted_status: Mapped[str] = mapped_column(String(40), default="Under Review")
+    approve_permission: Mapped[str] = mapped_column(String(120), default="procurement.catalogue.approve")
+    require_decision_reason: Mapped[bool] = mapped_column(Boolean, default=True)
+    decision_reason_min_length: Mapped[int] = mapped_column(Integer, default=3)
+    enforce_separation_of_duties: Mapped[bool] = mapped_column(Boolean, default=True)
+    reviewer_stages: Mapped[list] = mapped_column(JSON, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     modified_by: Mapped[int] = mapped_column(ForeignKey("users.id"))
     modified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=now, onupdate=now)

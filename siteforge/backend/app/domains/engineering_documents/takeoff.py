@@ -528,6 +528,7 @@ def _review_flags(db, line):
         flags.append("No catalogue item")
     else:
         item = db.get(ProcurementItem, line.item_id)
+        conversion = None
         if item and line.unit and line.unit.casefold() != item.base_unit.casefold():
             conversion = (
                 db.query(UnitConversion)
@@ -537,8 +538,9 @@ def _review_flags(db, line):
                 .filter_by(organization_id=item.organization_id, from_unit=item.base_unit, to_unit=line.unit)
                 .first()
             )
-            if not conversion:
-                flags.append(f"Unit {line.unit} differs from catalogue unit {item.base_unit} and has no conversion")
+        if item:
+            from app.domains.supply_chain.catalogue_match import compatibility_flags
+            flags.extend(compatibility_flags(line, item, has_conversion=bool(conversion)))
     if line.confidence is not None and Decimal(str(line.confidence)) < Decimal("0.6"):
         flags.append("Low extraction confidence")
     return flags

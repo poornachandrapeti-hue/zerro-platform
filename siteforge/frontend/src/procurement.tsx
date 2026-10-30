@@ -6,9 +6,11 @@ import {
   ClipboardCheck,
   ClipboardList,
   BadgeCheck,
+  Download,
   PackageSearch,
   FileSearch,
   FileSpreadsheet,
+  ListChecks,
   Pencil,
   ScrollText,
   Send,
@@ -21,7 +23,7 @@ import {
   Truck,
   Warehouse,
 } from "lucide-react";
-import { api, postForm } from "./api";
+import { api, downloadFile, postForm } from "./api";
 import { RouteLockNotice, routeLocked } from "./approval_levels";
 import { FulfilmentPanel, PurchaseNeeds } from "./materials";
 import type { Catalog, Page, Project, Session } from "./types";
@@ -172,6 +174,8 @@ type Requisition = {
   ordering_note: string;
   justification: string;
   currency: string;
+  request_date?: string;
+  required_delivery?: string;
   company: string;
   discipline: string;
   version: number;
@@ -1147,10 +1151,55 @@ function Requisitions({
   onError: (text: string) => void;
 }) {
   const [reason, setReason] = useState("");
+  const [editJustification, setEditJustification] = useState("");
+  const [editRequestDate, setEditRequestDate] = useState("");
+  const [editDelivery, setEditDelivery] = useState("");
+  const [editCurrency, setEditCurrency] = useState("");
+  const [editQty, setEditQty] = useState<Record<number, string>>({});
+  const [editPrices, setEditPrices] = useState<Record<number, string>>({});
+  const [editBusy, setEditBusy] = useState(false);
   useEffect(() => {
     onNeedRequirements();
   }, []);
+  useEffect(() => {
+    if (!selected) return;
+    setEditJustification(selected.justification || "");
+    setEditRequestDate(selected.request_date || "");
+    setEditDelivery(selected.required_delivery || "");
+    setEditCurrency(selected.currency || "");
+    setEditQty(Object.fromEntries(selected.lines.map((line) => [line.id || 0, line.quantity || ""])));
+    setEditPrices(Object.fromEntries(selected.lines.map((line) => [line.id || 0, line.estimated_price || ""])));
+  }, [selected?.id, selected?.version]);
   const approved = requirements.filter((row) => row.status === "Approved");
+  const canCorrect = selected != null && ["Draft", "Returned for Correction"].includes(selected.status) && context.access.requisition_edit;
+  async function saveCorrections() {
+    if (!selected || editBusy) return;
+    setEditBusy(true);
+    try {
+      const priced = context.access.commercial && selected.lines.some((line) => (editPrices[line.id || 0] || "").trim());
+      const row = await api<Requisition>(`/projects/${pid}/procurement/requisitions/${selected.id}`, "PUT", {
+        number: selected.number,
+        request_date: editRequestDate || selected.request_date,
+        required_delivery: editDelivery || selected.required_delivery,
+        justification: editJustification.trim() || selected.justification,
+        currency: priced ? editCurrency.trim() : (context.access.commercial ? "" : selected.currency || ""),
+        version: selected.version,
+        lines: selected.lines.map((line) => ({
+          requirement_line_id: line.requirement_line_id,
+          quantity: (editQty[line.id || 0] || line.quantity).trim(),
+          estimated_price: context.access.commercial
+            ? ((editPrices[line.id || 0] || "").trim() || null)
+            : (line.estimated_price || null),
+        })),
+      });
+      onError("");
+      onChange(row);
+    } catch (err) {
+      onError((err as Error).message);
+    } finally {
+      setEditBusy(false);
+    }
+  }
   return (
     <>
       <label>
@@ -1206,6 +1255,62 @@ function Requisitions({
               </li>
             ))}
           </ul>
+          {canCorrect && (
+            <form
+              className="option-grid"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveCorrections();
+              }}
+            >
+              <h4>{selected.status === "Returned for Correction" ? "Correct returned requisition" : "Edit draft requisition"}</h4>
+              <p className="muted">Change justification, dates, or quantities, save, then resubmit. Estimated prices need commercial access.</p>
+              <label>
+                Justification
+                <input aria-label="Requisition justification" value={editJustification} onChange={(e) => setEditJustification(e.target.value)} required />
+              </label>
+              <label>
+                Request date
+                <input aria-label="Requisition request date" type="date" value={editRequestDate} onChange={(e) => setEditRequestDate(e.target.value)} required />
+              </label>
+              <label>
+                Required delivery
+                <input aria-label="Requisition delivery date" type="date" value={editDelivery} onChange={(e) => setEditDelivery(e.target.value)} required />
+              </label>
+              {selected.lines.map((line) => (
+                <label key={line.id}>
+                  Quantity · {line.item_code}
+                  <input
+                    aria-label={`Quantity for ${line.item_code}`}
+                    value={editQty[line.id || 0] || ""}
+                    onChange={(e) => setEditQty((old) => ({ ...old, [line.id || 0]: e.target.value }))}
+                    required
+                  />
+                </label>
+              ))}
+              {context.access.commercial ? (
+                <>
+                  <label>
+                    Currency
+                    <input aria-label="Requisition currency" value={editCurrency} onChange={(e) => setEditCurrency(e.target.value)} placeholder="INR" />
+                  </label>
+                  {selected.lines.map((line) => (
+                    <label key={`price-${line.id}`}>
+                      Estimated price · {line.item_code}
+                      <input
+                        aria-label={`Estimated price for ${line.item_code}`}
+                        value={editPrices[line.id || 0] || ""}
+                        onChange={(e) => setEditPrices((old) => ({ ...old, [line.id || 0]: e.target.value }))}
+                      />
+                    </label>
+                  ))}
+                </>
+              ) : (
+                <p className="note-card note-alert">Neelu / Procurement Officer can correct qty and text, but not estimated prices. Prices stay as saved. Use Procurement Manager for price changes.</p>
+              )}
+              <button type="submit" className="tone-note" disabled={editBusy}>Save corrections</button>
+            </form>
+          )}
           {selected.review && (
             <ReviewBox
               review={selected.review}
@@ -1215,21 +1320,39 @@ function Requisitions({
               onDone={async () => onChange(await api<Requisition>(`/projects/${pid}/procurement/requisitions/${selected.id}`))}
             />
           )}
-          {selected.status === "Draft" && context.access.requisition_edit && (
-            <button
-              type="button"
-              className="tone-submit"
-              onClick={() =>
-                void api<Requisition>(`/projects/${pid}/procurement/requisitions/${selected.id}/submit`, "POST", {
-                  version: selected.version,
-                })
-                  .then(onChange)
-                  .catch((err) => onError((err as Error).message))
-              }
-            >
-              Submit for review
-            </button>
-          )}
+          <div className="inline">
+            {selected.status === "Draft" && context.access.requisition_edit && (
+              <button
+                type="button"
+                className="tone-submit"
+                onClick={() =>
+                  void api<Requisition>(`/projects/${pid}/procurement/requisitions/${selected.id}/submit`, "POST", {
+                    version: selected.version,
+                  })
+                    .then(onChange)
+                    .catch((err) => onError((err as Error).message))
+                }
+              >
+                Submit for review
+              </button>
+            )}
+            {selected.status === "Returned for Correction" && context.access.requisition_edit && selected.review && (
+              <button
+                type="button"
+                className="tone-submit"
+                onClick={() =>
+                  void api<Requisition>(`/projects/${pid}/procurement/requisitions/${selected.id}/resubmit`, "POST", {
+                    version: selected.version,
+                    review_version: selected.review!.version,
+                  })
+                    .then(onChange)
+                    .catch((err) => onError((err as Error).message))
+                }
+              >
+                Resubmit
+              </button>
+            )}
+          </div>
         </section>
       )}
     </>
@@ -1353,7 +1476,37 @@ function Masters({
   const [category, setCategory] = useState("");
   const [discipline, setDiscipline] = useState(catalog.disciplines[0]?.id || 0);
   const [unit, setUnit] = useState("");
+  const [purchaseUnit, setPurchaseUnit] = useState("");
+  const [issueUnit, setIssueUnit] = useState("");
+  const [specification, setSpecification] = useState("");
+  const [sizeRating, setSizeRating] = useState("");
+  const [subcategory, setSubcategory] = useState("");
+  const [materialGrade, setMaterialGrade] = useState("");
+  const [applicableStandard, setApplicableStandard] = useState("");
+  const [approvedMake, setApprovedMake] = useState("");
+  const [modelNumber, setModelNumber] = useState("");
+  const [manufacturerPartNumber, setManufacturerPartNumber] = useState("");
+  const [hsnCode, setHsnCode] = useState("");
   const [inspection, setInspection] = useState(false);
+  const [tracking, setTracking] = useState(false);
+  const [mtcRequired, setMtcRequired] = useState(false);
+  const [calibrationRequired, setCalibrationRequired] = useState(false);
+  const [shelfLifeApplicable, setShelfLifeApplicable] = useState(false);
+  const [shelfLifeDays, setShelfLifeDays] = useState("");
+  const [preferredVendorId, setPreferredVendorId] = useState<number>(0);
+  const [allowDuplicate, setAllowDuplicate] = useState(false);
+  const [duplicateWarning, setDuplicateWarning] = useState("");
+  const [duplicateExact, setDuplicateExact] = useState<{ code: string; description?: string }[]>([]);
+  const [duplicatePossible, setDuplicatePossible] = useState<{ code: string; description?: string }[]>([]);
+  const [activationReason, setActivationReason] = useState("");
+  const [editingItemId, setEditingItemId] = useState<number | null>(null);
+  const [editingVersion, setEditingVersion] = useState<number | null>(null);
+  const [itemFilter, setItemFilter] = useState("All");
+  const [itemSearch, setItemSearch] = useState("");
+  const [typeFilter, setTypeFilter] = useState("All");
+  const [disciplineFilter, setDisciplineFilter] = useState(0);
+  const [categoryFilter, setCategoryFilter] = useState("");
+  const [exchangeBusy, setExchangeBusy] = useState(false);
   const [fromUnit, setFromUnit] = useState("");
   const [toUnit, setToUnit] = useState("");
   const [factor, setFactor] = useState("");
@@ -1362,11 +1515,57 @@ function Masters({
   const [vendorRows, setVendorRows] = useState<
     { id: number; code: string; company: string; company_id: number; approval_status: string; active: boolean; version: number }[]
   >([]);
+  type MasterCategory = {
+    id: number;
+    discipline: string;
+    name: string;
+    active: boolean;
+    qa_document_types?: string[];
+    subcategories: { id: number; category_id: number; name: string; active: boolean }[];
+  };
+  type MasterUom = { id: number; code: string; name: string; active: boolean };
+  type MasterGrade = { id: number; code: string; name: string; discipline: string; active: boolean };
+  type MasterStandard = { id: number; code: string; title: string; active: boolean };
+  type MasterManufacturer = { id: number; code: string; name: string; active: boolean };
+  const [masterCategories, setMasterCategories] = useState<MasterCategory[]>([]);
+  const [masterUoms, setMasterUoms] = useState<MasterUom[]>([]);
+  const [masterGrades, setMasterGrades] = useState<MasterGrade[]>([]);
+  const [masterStandards, setMasterStandards] = useState<MasterStandard[]>([]);
+  const [masterManufacturers, setMasterManufacturers] = useState<MasterManufacturer[]>([]);
+  const [masterCategoryName, setMasterCategoryName] = useState("");
+  const [masterCategoryDiscipline, setMasterCategoryDiscipline] = useState(catalog.disciplines[0]?.name || "");
+  const [masterCategoryQaDocs, setMasterCategoryQaDocs] = useState("");
+  const [masterSubcategoryName, setMasterSubcategoryName] = useState("");
+  const [masterSubcategoryCategoryId, setMasterSubcategoryCategoryId] = useState(0);
+  const [masterUomCode, setMasterUomCode] = useState("");
+  const [masterUomName, setMasterUomName] = useState("");
+  const [masterGradeCode, setMasterGradeCode] = useState("");
+  const [masterGradeName, setMasterGradeName] = useState("");
+  const [masterStandardCode, setMasterStandardCode] = useState("");
+  const [masterStandardTitle, setMasterStandardTitle] = useState("");
+  const [masterManufacturerCode, setMasterManufacturerCode] = useState("");
+  const [masterManufacturerName, setMasterManufacturerName] = useState("");
   async function loadVendors() {
     setVendorRows(await api("/procurement/vendors"));
   }
+  async function loadCatalogueMasters() {
+    const [categories, uoms, grades, standards, manufacturers] = await Promise.all([
+      api<MasterCategory[]>("/procurement/catalogue-masters/categories?include_inactive=true"),
+      api<MasterUom[]>("/procurement/catalogue-masters/uoms?include_inactive=true"),
+      api<MasterGrade[]>("/procurement/catalogue-masters/grades?include_inactive=true"),
+      api<MasterStandard[]>("/procurement/catalogue-masters/standards?include_inactive=true"),
+      api<MasterManufacturer[]>("/procurement/catalogue-masters/manufacturers?include_inactive=true"),
+    ]);
+    setMasterCategories(categories);
+    setMasterUoms(uoms);
+    setMasterGrades(grades);
+    setMasterStandards(standards);
+    setMasterManufacturers(manufacturers);
+    if (!masterSubcategoryCategoryId && categories[0]) setMasterSubcategoryCategoryId(categories[0].id);
+  }
   useEffect(() => {
     void loadVendors().catch((err) => onError((err as Error).message));
+    void loadCatalogueMasters().catch((err) => onError((err as Error).message));
   }, []);
   async function setVendorStatus(
     row: { id: number; code: string; company_id: number; active: boolean; version: number },
@@ -1389,7 +1588,15 @@ function Masters({
   const [warehouseCode, setWarehouseCode] = useState("");
   const [warehouseName, setWarehouseName] = useState("");
   const [officer, setOfficer] = useState(context.people[0]?.id || 0);
-  type SpecificationField = { key: string; label: string; type: "text" | "number" | "boolean" | "select"; required: boolean; options: string[] };
+  type SpecificationField = {
+    key: string;
+    label: string;
+    type: "text" | "number" | "decimal" | "boolean" | "date" | "select" | "multiselect";
+    required: boolean;
+    options: string[];
+    unit?: string;
+    help_text?: string;
+  };
   type SpecificationGroup = { discipline: string; categories: Array<{ name: string; fields: SpecificationField[] }> };
   const [specTemplates, setSpecTemplates] = useState<SpecificationGroup[]>([]);
   const [templateCategory, setTemplateCategory] = useState("");
@@ -1399,6 +1606,12 @@ function Masters({
   const disciplineName = catalog.disciplines.find((row) => row.id === discipline)?.name || "";
   const specCategories = specTemplates.find((x) => x.discipline === disciplineName)?.categories || [];
   const specFields = specCategories.find((x) => x.name === category)?.fields || [];
+  const activeMasterCategories = masterCategories.filter((row) => row.active && row.discipline === disciplineName);
+  const activeMasterSubcategories = activeMasterCategories.find((row) => row.name === category)?.subcategories.filter((row) => row.active) || [];
+  const activeMasterUoms = masterUoms.filter((row) => row.active);
+  const activeMasterGrades = masterGrades.filter((row) => row.active);
+  const activeMasterStandards = masterStandards.filter((row) => row.active);
+  const activeMasterManufacturers = masterManufacturers.filter((row) => row.active);
   async function reloadTemplates(): Promise<SpecificationGroup[]> {
     const rows = await api<SpecificationGroup[]>(
       "/procurement/items/specification-templates"
@@ -1407,7 +1620,9 @@ function Masters({
     setSpecTemplates(rows);
     return rows;
   }
-  useEffect(() => { void reloadTemplates().catch(() => { }); }, []);
+  useEffect(() => {
+    void reloadTemplates().catch((error) => onError((error as Error).message));
+  }, []);
   function loadTemplate(categoryName: string) {
     setTemplateCategory(categoryName);
     const matching = specCategories.find((x) => x.name === categoryName);
@@ -1426,8 +1641,39 @@ function Masters({
       onError((err as Error).message);
     } finally { setTemplateSaving(false); }
   }
-  type CatalogueReviewItem = { id: number; code: string; description: string; approval_status: string; active: boolean; version: number };
-  type CatalogueReviewEvent = { action: string; reason: string; actor_id: number; item_version: number; created_at: string };
+  type CatalogueReviewItem = {
+    id: number;
+    code: string;
+    description: string;
+    item_type: string;
+    category: string;
+    subcategory: string;
+    discipline_ids: number[];
+    specification: string;
+    specification_attributes: Record<string, string | number | boolean | string[]>;
+    approval_status: string;
+    size_rating: string;
+    material_grade: string;
+    applicable_standard: string;
+    base_unit: string;
+    purchase_unit?: string;
+    issue_unit?: string;
+    qa_document_types?: string[];
+    approved_make: string;
+    model_number: string;
+    manufacturer_part_number: string;
+    hsn_code: string;
+    inspection_required: boolean;
+    tracking_required: boolean;
+    mtc_required: boolean;
+    calibration_certificate_required: boolean;
+    shelf_life_applicable: boolean;
+    shelf_life_days: number | null;
+    preferred_vendor_id: number | null;
+    active: boolean;
+    version: number;
+  };
+  type CatalogueReviewEvent = { action: string; reason: string; actor_id: number; item_version: number; created_at: string; specification_snapshot?: Record<string, unknown> };
   const [catalogueReviewItems, setCatalogueReviewItems] = useState<CatalogueReviewItem[]>([]);
   const [reviewItemId, setReviewItemId] = useState<number>(0);
   const [reviewHistory, setReviewHistory] = useState<CatalogueReviewEvent[]>([]);
@@ -1500,9 +1746,13 @@ function Masters({
         proposedValue = JSON.parse(amendmentValue);
         if (typeof proposedValue !== "object" || proposedValue === null || Array.isArray(proposedValue)) throw Error();
       } catch { setAmendmentMessage("Specifications must be a valid JSON object."); return; }
-    } else if (amendmentField === "inspection_required" || amendmentField === "tracking_required") {
+    } else if (["inspection_required", "tracking_required", "mtc_required", "calibration_certificate_required", "shelf_life_applicable"].includes(amendmentField)) {
       if (!["true", "false"].includes(amendmentValue.trim().toLowerCase())) { setAmendmentMessage("Use true or false."); return; }
       proposedValue = amendmentValue.trim().toLowerCase() === "true";
+    } else if (amendmentField === "shelf_life_days") {
+      const days = Number(amendmentValue.trim());
+      if (!Number.isInteger(days) || days < 1) { setAmendmentMessage("Shelf life days must be a positive whole number."); return; }
+      proposedValue = days;
     }
     setAmendmentBusy(true); setAmendmentMessage("");
     try {
@@ -1527,19 +1777,55 @@ function Masters({
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewMessage, setReviewMessage] = useState("");
   const [catalogueApprovalAllowed, setCatalogueApprovalAllowed] = useState(false);
+  const [cataloguePendingStatuses, setCataloguePendingStatuses] = useState<string[]>(["Pending Approval", "Under Review"]);
+  const [decisionReasonMinLength, setDecisionReasonMinLength] = useState(3);
+  const [approvalConfig, setApprovalConfig] = useState<{
+    stages: string[];
+    submitted_status: string;
+    approve_permission: string;
+    require_decision_reason: boolean;
+    decision_reason_min_length: number;
+    enforce_separation_of_duties: boolean;
+    reviewer_stages?: { name: string; permission: string }[];
+    roles_with_permission?: { id: number; name: string }[];
+  } | null>(null);
+  const [itemFiles, setItemFiles] = useState<{ id: number; file_id: number; name: string; size?: number }[]>([]);
   const selectedReviewItem = catalogueReviewItems.find((item) => item.id === reviewItemId);
+  const itemIsPendingReview = selectedReviewItem ? cataloguePendingStatuses.includes(selectedReviewItem.approval_status) : false;
   async function refreshCatalogueReviewItems() {
     const rows = await api<CatalogueReviewItem[]>("/procurement/items");
     setCatalogueReviewItems(rows);
     setReviewItemId((current) => current && rows.some((item) => item.id === current) ? current : (rows[0]?.id || 0));
   }
+  async function loadItemFiles(itemId: number) {
+    if (!itemId) { setItemFiles([]); return; }
+    setItemFiles(await api(`/procurement/items/${itemId}/files`));
+  }
   useEffect(() => {
     let active = true;
-    void api<{ can_approve: boolean }>("/procurement/items/approval-capability")
-      .then((result) => { if (active) setCatalogueApprovalAllowed(result.can_approve); })
+    void api<{
+      can_approve: boolean;
+      submitted_status?: string;
+      decision_reason_min_length?: number;
+    }>("/procurement/items/approval-capability")
+      .then((result) => {
+        if (!active) return;
+        setCatalogueApprovalAllowed(result.can_approve);
+        const pending = Array.from(new Set(["Pending Approval", "Under Review", result.submitted_status || "Under Review"].filter(Boolean))) as string[];
+        setCataloguePendingStatuses(pending);
+        if (result.decision_reason_min_length) setDecisionReasonMinLength(result.decision_reason_min_length);
+      })
       .catch(() => { if (active) setCatalogueApprovalAllowed(false); });
+    if (context.access.admin) {
+      void api<typeof approvalConfig>("/procurement/catalogue-masters/approval-config")
+        .then((result) => { if (active) setApprovalConfig(result); })
+        .catch(() => { /* keep defaults */ });
+    }
     return () => { active = false; };
   }, []);
+  useEffect(() => {
+    void loadItemFiles(reviewItemId).catch(() => setItemFiles([]));
+  }, [reviewItemId]);
   useEffect(() => {
     void refreshCatalogueReviewItems().catch((error) => onError((error as Error).message));
   }, []);
@@ -1553,8 +1839,8 @@ function Masters({
   }, [reviewItemId]);
   async function catalogueReviewAction(action: "Submit" | "Approve" | "Reject") {
     if (!selectedReviewItem || reviewBusy) return;
-    if (action !== "Submit" && decisionReason.trim().length < 3) {
-      setReviewMessage("Enter a reason containing at least 3 characters.");
+    if (action !== "Submit" && decisionReason.trim().length < decisionReasonMinLength) {
+      setReviewMessage(`Enter a reason containing at least ${decisionReasonMinLength} characters.`);
       return;
     }
     setReviewBusy(true);
@@ -1576,36 +1862,211 @@ function Masters({
     }
   }
   const canMaster = context.access.master || context.access.admin;
-  async function createItem(event: FormEvent) {
-    event.preventDefault();
+  const catalogueCategories = Array.from(new Set(catalogueReviewItems.map((item) => item.category).filter(Boolean))).sort();
+  const filteredCatalogueItems = catalogueReviewItems.filter((item) => {
+    if (itemFilter !== "All" && item.approval_status !== itemFilter) return false;
+    if (typeFilter !== "All" && item.item_type !== typeFilter) return false;
+    if (disciplineFilter && !(item.discipline_ids || []).includes(disciplineFilter)) return false;
+    if (categoryFilter && item.category !== categoryFilter) return false;
+    const needle = itemSearch.trim().toLowerCase();
+    if (!needle) return true;
+    return [item.code, item.description, item.category, item.subcategory, item.manufacturer_part_number, item.approved_make]
+      .join(" ")
+      .toLowerCase()
+      .includes(needle);
+  });
+  function buildSpecAttributePayload() {
+    return Object.fromEntries(specFields.filter((field) => {
+      const value = specAttributes[field.key];
+      return value !== undefined && (field.type === "boolean" || String(value).trim() !== "");
+    }).map((field) => [
+      field.key,
+      field.type === "boolean"
+        ? specAttributes[field.key] === "true"
+        : field.type === "number" || field.type === "decimal"
+          ? Number(specAttributes[field.key])
+          : field.type === "multiselect"
+            ? String(specAttributes[field.key] || "").split("|").filter(Boolean)
+            : specAttributes[field.key],
+    ]));
+  }
+  function itemFormPayload(includeDuplicateFlag = allowDuplicate) {
+    return {
+      code,
+      description,
+      item_type: itemType,
+      category,
+      subcategory,
+      discipline_ids: [discipline],
+      base_unit: unit,
+      purchase_unit: purchaseUnit || unit,
+      issue_unit: issueUnit || unit,
+      specification,
+      size_rating: sizeRating,
+      material_grade: materialGrade,
+      applicable_standard: applicableStandard,
+      approved_make: approvedMake,
+      model_number: modelNumber,
+      manufacturer_part_number: manufacturerPartNumber,
+      hsn_code: hsnCode,
+      specification_discipline: disciplineName,
+      specification_attributes: buildSpecAttributePayload(),
+      inspection_required: inspection,
+      tracking_required: tracking,
+      mtc_required: mtcRequired,
+      calibration_certificate_required: calibrationRequired,
+      shelf_life_applicable: shelfLifeApplicable,
+      shelf_life_days: shelfLifeApplicable && shelfLifeDays ? Number(shelfLifeDays) : null,
+      preferred_vendor_id: preferredVendorId || null,
+      allow_duplicate: includeDuplicateFlag,
+      ...(editingItemId != null && editingVersion != null ? { version: editingVersion } : {}),
+    };
+  }
+  function resetItemForm() {
+    setEditingItemId(null);
+    setEditingVersion(null);
+    setCode("");
+    setDescription("");
+    setItemType("Material");
+    setCategory("");
+    setSubcategory("");
+    setDiscipline(catalog.disciplines[0]?.id || 0);
+    setUnit("");
+    setPurchaseUnit("");
+    setIssueUnit("");
+    setSpecification("");
+    setSizeRating("");
+    setMaterialGrade("");
+    setApplicableStandard("");
+    setApprovedMake("");
+    setModelNumber("");
+    setManufacturerPartNumber("");
+    setHsnCode("");
+    setInspection(false);
+    setTracking(false);
+    setMtcRequired(false);
+    setCalibrationRequired(false);
+    setShelfLifeApplicable(false);
+    setShelfLifeDays("");
+    setPreferredVendorId(0);
+    setAllowDuplicate(false);
+    setDuplicateWarning("");
+    setSpecAttributes({});
+  }
+  function beginEditItem(item: CatalogueReviewItem) {
+    if (!["Draft", "Rejected"].includes(item.approval_status)) return;
+    setEditingItemId(item.id);
+    setEditingVersion(item.version);
+    setCode(item.code);
+    setDescription(item.description);
+    setItemType(item.item_type || "Material");
+    setCategory(item.category || "");
+    setSubcategory(item.subcategory || "");
+    setDiscipline(item.discipline_ids?.[0] || catalog.disciplines[0]?.id || 0);
+    setUnit(item.base_unit || "");
+    setPurchaseUnit(item.purchase_unit || item.base_unit || "");
+    setIssueUnit(item.issue_unit || item.base_unit || "");
+    setSpecification(item.specification || "");
+    setSizeRating(item.size_rating || "");
+    setMaterialGrade(item.material_grade || "");
+    setApplicableStandard(item.applicable_standard || "");
+    setApprovedMake(item.approved_make || "");
+    setModelNumber(item.model_number || "");
+    setManufacturerPartNumber(item.manufacturer_part_number || "");
+    setHsnCode(item.hsn_code || "");
+    setInspection(Boolean(item.inspection_required));
+    setTracking(Boolean(item.tracking_required));
+    setMtcRequired(Boolean(item.mtc_required));
+    setCalibrationRequired(Boolean(item.calibration_certificate_required));
+    setShelfLifeApplicable(Boolean(item.shelf_life_applicable));
+    setShelfLifeDays(item.shelf_life_days ? String(item.shelf_life_days) : "");
+    setPreferredVendorId(item.preferred_vendor_id || 0);
+    setAllowDuplicate(false);
+    setDuplicateWarning("");
+    setSpecAttributes(Object.fromEntries(
+      Object.entries(item.specification_attributes || {}).map(([key, value]) => [
+        key,
+        Array.isArray(value) ? value.join("|") : String(value),
+      ]),
+    ));
+    setReviewItemId(item.id);
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  async function checkDuplicates() {
     try {
-      await api("/procurement/items", "POST", {
-        code,
-        description,
-        item_type: itemType,
-        category,
-        discipline_ids: [discipline],
-        base_unit: unit,
-        specification_discipline: disciplineName,
-        specification_attributes: Object.fromEntries(specFields.filter((field) => {
-          const value = specAttributes[field.key];
-          return value !== undefined && (field.type === "boolean" || String(value).trim() !== "");
-        }).map((field) => [field.key, field.type === "boolean" ? specAttributes[field.key] === "true" : field.type === "number" ? Number(specAttributes[field.key]) : specAttributes[field.key]])),
-        inspection_required: inspection,
-      });
+      const result = await api<{ blocking: boolean; exact: { code: string; description?: string }[]; possible: { code: string; description?: string }[] }>(
+        "/procurement/items/duplicate-check",
+        "POST",
+        itemFormPayload(false),
+      );
+      setDuplicateExact(result.exact || []);
+      setDuplicatePossible(result.possible || []);
+      if (result.blocking) {
+        setDuplicateWarning(`Exact duplicate blocked. Confirm allow duplicate only if intentional.`);
+      } else if (result.possible.length) {
+        setDuplicateWarning(`Possible related items found. Review before saving.`);
+      } else {
+        setDuplicateWarning("No catalogue duplicates found for this identity.");
+      }
+    } catch (err) {
+      onError((err as Error).message);
+    }
+  }
+  async function setItemActive(item: CatalogueReviewItem, active: boolean) {
+    if (item.approval_status !== "Approved") return;
+    const reason = activationReason.trim() || window.prompt(active ? "Reason to activate item?" : "Reason to deactivate item?") || "";
+    if (reason.trim().length < 3) {
+      onError("Enter an activation reason of at least 3 characters.");
+      return;
+    }
+    try {
+      await api(`/procurement/items/${item.id}/activation`, "POST", { active, reason: reason.trim() });
+      setActivationReason("");
+      onError("");
+      await refreshCatalogueReviewItems();
+      onSaved();
+    } catch (err) {
+      onError((err as Error).message);
+    }
+  }
+  async function saveItem(event: FormEvent) {
+    event.preventDefault();
+    const payload = itemFormPayload();
+    try {
+      if (editingItemId != null) {
+        await api(`/procurement/items/${editingItemId}`, "PUT", payload);
+      } else {
+        await api("/procurement/items", "POST", payload);
+      }
       onError("");
       onSaved();
-      setCode("");
-      setDescription("");
+      resetItemForm();
       await refreshCatalogueReviewItems();
     } catch (err) {
       onError((err as Error).message);
     }
   }
+  async function downloadCatalogue(kind: "export" | "export-csv" | "template") {
+    setExchangeBusy(true);
+    try {
+      if (kind === "export") {
+        await downloadFile("/procurement/items/export.xlsx", "catalogue-items.xlsx");
+      } else if (kind === "export-csv") {
+        await downloadFile("/procurement/items/export.csv", "catalogue-items.csv");
+      } else {
+        await downloadFile("/procurement/items/template", "catalogue-import-pack.xlsx");
+      }
+      onError("");
+    } catch (error) {
+      onError((error as Error).message);
+    } finally {
+      setExchangeBusy(false);
+    }
+  }
   if (!canMaster) {
     return (
       <section className="panel">
-        <h3>Master data</h3>
+        <h3 className="section-mark"><Package size={18} strokeWidth={2.4} /> Master data</h3>
         <p>Item, vendor, and warehouse setup is limited to a procurement manager or the organization administrator.</p>
         <ul>
           {context.items.map((item) => (
@@ -1619,8 +2080,184 @@ function Masters({
   }
   return (
     <>
-      <form className="option-grid" onSubmit={(event) => void createItem(event)}>
-        <h3 className="section-mark"><Package size={18} strokeWidth={2.4} /> Item</h3>
+      {context.access.admin && approvalConfig && (
+        <section className="panel" aria-label="Catalogue approval configuration">
+          <h3 className="section-mark"><ClipboardCheck size={18} strokeWidth={2.4} /> Catalogue approval configuration</h3>
+          <p>Configure workflow labels and the permission used for catalogue decisions. Role grants stay in RBAC; this screen does not auto-grant approve rights.</p>
+          <form className="option-grid" onSubmit={(event) => {
+            event.preventDefault();
+            void api<{
+              stages: string[];
+              submitted_status: string;
+              approve_permission: string;
+              require_decision_reason: boolean;
+              decision_reason_min_length: number;
+              enforce_separation_of_duties: boolean;
+              roles_with_permission?: { id: number; name: string }[];
+            }>("/procurement/catalogue-masters/approval-config", "PUT", approvalConfig)
+              .then((result) => {
+                setApprovalConfig((old) => ({ ...(old || approvalConfig), ...result }));
+                setCataloguePendingStatuses(Array.from(new Set(["Pending Approval", "Under Review", result.submitted_status])));
+                setDecisionReasonMinLength(result.decision_reason_min_length || 3);
+                onError("");
+                onSaved();
+              })
+              .catch((err) => onError((err as Error).message));
+          }}>
+            <label>Submitted status
+              <select aria-label="Catalogue submitted status" value={approvalConfig.submitted_status} onChange={(e) => setApprovalConfig({ ...approvalConfig, submitted_status: e.target.value })}>
+                <option>Under Review</option>
+                <option>Pending Approval</option>
+              </select>
+            </label>
+            <label>Approve permission key
+              <input aria-label="Catalogue approve permission" value={approvalConfig.approve_permission} onChange={(e) => setApprovalConfig({ ...approvalConfig, approve_permission: e.target.value })} required />
+            </label>
+            <label>Decision reason minimum length
+              <input aria-label="Decision reason minimum length" type="number" min={3} max={200} value={approvalConfig.decision_reason_min_length} onChange={(e) => setApprovalConfig({ ...approvalConfig, decision_reason_min_length: Number(e.target.value) })} />
+            </label>
+            <label>
+              <input type="checkbox" checked={approvalConfig.require_decision_reason} onChange={(e) => setApprovalConfig({ ...approvalConfig, require_decision_reason: e.target.checked })} /> Require decision reason
+            </label>
+            <label>
+              <input type="checkbox" checked={approvalConfig.enforce_separation_of_duties} onChange={(e) => setApprovalConfig({ ...approvalConfig, enforce_separation_of_duties: e.target.checked })} /> Enforce separation of duties
+            </label>
+            <label>Stage labels (comma separated)
+              <input aria-label="Catalogue stage labels" value={approvalConfig.stages.join(", ")} onChange={(e) => setApprovalConfig({ ...approvalConfig, stages: e.target.value.split(",").map((part) => part.trim()).filter(Boolean) })} />
+            </label>
+            <label>Reviewer stages (name:permission per line)
+              <textarea
+                aria-label="Catalogue reviewer stages"
+                value={(approvalConfig.reviewer_stages || []).map((stage) => `${stage.name}:${stage.permission}`).join("\n")}
+                onChange={(e) => setApprovalConfig({
+                  ...approvalConfig,
+                  reviewer_stages: e.target.value.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+                    const [name, permission] = line.split(":").map((part) => part.trim());
+                    return { name: name || "Under Review", permission: permission || approvalConfig.approve_permission };
+                  }),
+                })}
+              />
+            </label>
+            <button type="submit" className="tone-submit">Save approval configuration</button>
+          </form>
+          <p className="muted">Roles currently holding {approvalConfig.approve_permission}: {(approvalConfig.roles_with_permission || []).map((role) => role.name).join(", ") || "none yet — grant in role administration"}</p>
+        </section>
+      )}
+      <section className="panel" aria-label="Catalogue reference masters">
+        <h3 className="section-mark"><ClipboardList size={18} strokeWidth={2.4} /> Catalogue reference masters</h3>
+        <p>Configure categories, UOM, grades, standards and manufacturers for this organization. When a master has active rows, item create/edit and Excel import must use those values. Discipline names reuse the existing organization discipline list. Set masters before a bulk import.</p>
+        <div className="inline">
+          <button type="button" className="tone-note" onClick={() => void api("/procurement/catalogue-masters/seed-categories", "POST", {}).then(() => loadCatalogueMasters()).catch((err) => onError((err as Error).message))}>
+            Seed categories from templates
+          </button>
+          <button type="button" className="tone-note" onClick={() => void loadCatalogueMasters().catch((err) => onError((err as Error).message))}>Refresh masters</button>
+        </div>
+        <form className="option-grid" onSubmit={(event) => {
+          event.preventDefault();
+          void api("/procurement/catalogue-masters/categories", "POST", {
+            discipline: masterCategoryDiscipline,
+            name: masterCategoryName,
+            active: true,
+            qa_document_types: masterCategoryQaDocs.split(",").map((part) => part.trim()).filter(Boolean),
+          })
+            .then(() => { setMasterCategoryName(""); setMasterCategoryQaDocs(""); return loadCatalogueMasters(); })
+            .catch((err) => onError((err as Error).message));
+        }}>
+          <h4>Category</h4>
+          <label>Discipline
+            <select aria-label="Master category discipline" value={masterCategoryDiscipline} onChange={(e) => setMasterCategoryDiscipline(e.target.value)}>
+              {catalog.disciplines.map((row) => <option key={row.id} value={row.name}>{row.name}</option>)}
+            </select>
+          </label>
+          <label>Category name
+            <input aria-label="Master category name" value={masterCategoryName} onChange={(e) => setMasterCategoryName(e.target.value)} required />
+          </label>
+          <label>QA document pack (comma separated)
+            <input aria-label="Category QA document types" list="qa-doc-type-options" value={masterCategoryQaDocs} onChange={(e) => setMasterCategoryQaDocs(e.target.value)} placeholder="MTC, Inspection Report" />
+            <datalist id="qa-doc-type-options">
+              {["MTC", "Inspection Report", "Calibration Certificate", "CoC", "Material Certificate", "Test Certificate", "Datasheet"].map((name) => <option key={name} value={name} />)}
+            </datalist>
+          </label>
+          <button type="submit" className="tone-submit">Save category</button>
+        </form>
+        <form className="option-grid" onSubmit={(event) => {
+          event.preventDefault();
+          void api("/procurement/catalogue-masters/subcategories", "POST", { category_id: masterSubcategoryCategoryId, name: masterSubcategoryName, active: true })
+            .then(() => { setMasterSubcategoryName(""); return loadCatalogueMasters(); })
+            .catch((err) => onError((err as Error).message));
+        }}>
+          <h4>Subcategory</h4>
+          <label>Parent category
+            <select aria-label="Master subcategory parent" value={masterSubcategoryCategoryId || ""} onChange={(e) => setMasterSubcategoryCategoryId(Number(e.target.value))}>
+              {masterCategories.filter((row) => row.active).map((row) => <option key={row.id} value={row.id}>{row.discipline} · {row.name}</option>)}
+            </select>
+          </label>
+          <label>Subcategory name
+            <input aria-label="Master subcategory name" value={masterSubcategoryName} onChange={(e) => setMasterSubcategoryName(e.target.value)} required />
+          </label>
+          <button type="submit" className="tone-submit">Save subcategory</button>
+        </form>
+        <div className="catalogue-list">
+          {masterCategories.slice(0, 12).map((row) => (
+            <article key={row.id} className="note-card">
+              <strong>{row.discipline}</strong> · {row.name} <Pill value={row.active ? "Active" : "Inactive"} />
+              <p className="muted">{row.subcategories.filter((sub) => sub.active).map((sub) => sub.name).join(", ") || "No subcategories"}</p>
+              <p className="muted">QA docs: {(row.qa_document_types || []).join(", ") || "none"}</p>
+              <button type="button" className="tone-note" onClick={() => void api(`/procurement/catalogue-masters/categories/${row.id}`, "PUT", { discipline: row.discipline, name: row.name, active: !row.active, qa_document_types: row.qa_document_types || [] }).then(() => loadCatalogueMasters()).catch((err) => onError((err as Error).message))}>
+                {row.active ? "Deactivate" : "Activate"}
+              </button>
+            </article>
+          ))}
+        </div>
+        <form className="option-grid" onSubmit={(event) => {
+          event.preventDefault();
+          void api("/procurement/catalogue-masters/uoms", "POST", { code: masterUomCode, name: masterUomName || masterUomCode, active: true })
+            .then(() => { setMasterUomCode(""); setMasterUomName(""); return loadCatalogueMasters(); })
+            .catch((err) => onError((err as Error).message));
+        }}>
+          <h4>UOM</h4>
+          <label>Code <input aria-label="Master UOM code" value={masterUomCode} onChange={(e) => setMasterUomCode(e.target.value)} required maxLength={20} /></label>
+          <label>Name <input aria-label="Master UOM name" value={masterUomName} onChange={(e) => setMasterUomName(e.target.value)} /></label>
+          <button type="submit" className="tone-submit">Save UOM</button>
+        </form>
+        <div className="inline">{activeMasterUoms.map((row) => <span key={row.id} className="state-pill">{row.code}</span>)}</div>
+        <form className="option-grid" onSubmit={(event) => {
+          event.preventDefault();
+          void api("/procurement/catalogue-masters/grades", "POST", { code: masterGradeCode, name: masterGradeName || masterGradeCode, discipline: disciplineName, active: true })
+            .then(() => { setMasterGradeCode(""); setMasterGradeName(""); return loadCatalogueMasters(); })
+            .catch((err) => onError((err as Error).message));
+        }}>
+          <h4>Material grade</h4>
+          <label>Code <input aria-label="Master grade code" value={masterGradeCode} onChange={(e) => setMasterGradeCode(e.target.value)} required /></label>
+          <label>Name <input aria-label="Master grade name" value={masterGradeName} onChange={(e) => setMasterGradeName(e.target.value)} /></label>
+          <button type="submit" className="tone-submit">Save grade</button>
+        </form>
+        <form className="option-grid" onSubmit={(event) => {
+          event.preventDefault();
+          void api("/procurement/catalogue-masters/standards", "POST", { code: masterStandardCode, title: masterStandardTitle || masterStandardCode, active: true })
+            .then(() => { setMasterStandardCode(""); setMasterStandardTitle(""); return loadCatalogueMasters(); })
+            .catch((err) => onError((err as Error).message));
+        }}>
+          <h4>Standard</h4>
+          <label>Code <input aria-label="Master standard code" value={masterStandardCode} onChange={(e) => setMasterStandardCode(e.target.value)} required /></label>
+          <label>Title <input aria-label="Master standard title" value={masterStandardTitle} onChange={(e) => setMasterStandardTitle(e.target.value)} /></label>
+          <button type="submit" className="tone-submit">Save standard</button>
+        </form>
+        <form className="option-grid" onSubmit={(event) => {
+          event.preventDefault();
+          void api("/procurement/catalogue-masters/manufacturers", "POST", { code: masterManufacturerCode, name: masterManufacturerName, active: true })
+            .then(() => { setMasterManufacturerCode(""); setMasterManufacturerName(""); return loadCatalogueMasters(); })
+            .catch((err) => onError((err as Error).message));
+        }}>
+          <h4>Manufacturer</h4>
+          <label>Code <input aria-label="Master manufacturer code" value={masterManufacturerCode} onChange={(e) => setMasterManufacturerCode(e.target.value)} required /></label>
+          <label>Name <input aria-label="Master manufacturer name" value={masterManufacturerName} onChange={(e) => setMasterManufacturerName(e.target.value)} required /></label>
+          <button type="submit" className="tone-submit">Save manufacturer</button>
+        </form>
+      </section>
+      <form className="option-grid" onSubmit={(event) => void saveItem(event)}>
+        <h3 className="section-mark"><Package size={18} strokeWidth={2.4} /> {editingItemId != null ? "Edit item" : "Item"}</h3>
+        {editingItemId != null && <p>Editing draft or rejected item #{editingItemId}. Approved items must use the amendment workflow.</p>}
         <label>
           Code
           <input aria-label="Item code" value={code} onChange={(e) => setCode(e.target.value)} required />
@@ -1636,12 +2273,20 @@ function Masters({
             <option>Equipment</option>
             <option>Consumable</option>
             <option>Spare</option>
+            <option>Tool</option>
           </select>
         </label>
         <label>
           Category
-          <input aria-label="Item category" list="item-category-options" value={category} onChange={(e) => { setCategory(e.target.value); setSpecAttributes({}); }} required />
-          <datalist id="item-category-options">{specCategories.map((c) => <option key={c.name} value={c.name} />)}</datalist>
+          <input aria-label="Item category" list="item-category-options" value={category} onChange={(e) => { setCategory(e.target.value); setSubcategory(""); setSpecAttributes({}); }} required />
+          <datalist id="item-category-options">
+            {(activeMasterCategories.length ? activeMasterCategories.map((c) => c.name) : specCategories.map((c) => c.name)).map((name) => <option key={name} value={name} />)}
+          </datalist>
+        </label>
+        <label>
+          Subcategory
+          <input aria-label="Item subcategory" list="item-subcategory-options" value={subcategory} onChange={(e) => setSubcategory(e.target.value)} maxLength={120} />
+          <datalist id="item-subcategory-options">{activeMasterSubcategories.map((row) => <option key={row.id} value={row.name} />)}</datalist>
         </label>
         <label>
           Discipline
@@ -1654,44 +2299,256 @@ function Masters({
           </select>
         </label>
         <label>
-          UOM (base unit)
-          <input aria-label="Base unit" value={unit} onChange={(e) => setUnit(e.target.value)} required />
+          UOM
+          <input aria-label="UOM" list="item-uom-options" value={unit} onChange={(e) => { setUnit(e.target.value); if (!purchaseUnit) setPurchaseUnit(e.target.value); if (!issueUnit) setIssueUnit(e.target.value); }} required />
+          <datalist id="item-uom-options">{activeMasterUoms.map((row) => <option key={row.id} value={row.code}>{row.name || row.code}</option>)}</datalist>
+        </label>
+        <label>
+          Purchase UOM
+          <input aria-label="Purchase UOM" list="item-purchase-uom-options" value={purchaseUnit} onChange={(e) => setPurchaseUnit(e.target.value)} />
+          <datalist id="item-purchase-uom-options">{activeMasterUoms.map((row) => <option key={row.id} value={row.code}>{row.name || row.code}</option>)}</datalist>
+        </label>
+        <label>
+          Issue UOM
+          <input aria-label="Issue UOM" list="item-issue-uom-options" value={issueUnit} onChange={(e) => setIssueUnit(e.target.value)} />
+          <datalist id="item-issue-uom-options">{activeMasterUoms.map((row) => <option key={row.id} value={row.code}>{row.name || row.code}</option>)}</datalist>
+        </label>
+        {(() => {
+          const disciplineName = catalog.disciplines.find((row) => row.id === discipline)?.name || "";
+          const pack = masterCategories.find((row) => row.active && row.discipline === disciplineName && row.name === category)?.qa_document_types || [];
+          return pack.length > 0 ? <p className="muted" role="status">Category QA pack: {pack.join(", ")}</p> : null;
+        })()}
+        <label>
+          Specification
+          <input aria-label="Item specification" value={specification} onChange={(e) => setSpecification(e.target.value)} maxLength={2000} />
+        </label>
+        <label>
+          Size / rating
+          <input aria-label="Size or rating" value={sizeRating} onChange={(e) => setSizeRating(e.target.value)} maxLength={120} />
+        </label>
+        <label>
+          Material grade
+          <input aria-label="Material grade" list="item-grade-options" value={materialGrade} onChange={(e) => setMaterialGrade(e.target.value)} maxLength={120} />
+          <datalist id="item-grade-options">{activeMasterGrades.map((row) => <option key={row.id} value={row.code}>{row.name || row.code}</option>)}</datalist>
+        </label>
+        <label>
+          Applicable standard
+          <input aria-label="Applicable standard" list="item-standard-options" value={applicableStandard} onChange={(e) => setApplicableStandard(e.target.value)} maxLength={200} />
+          <datalist id="item-standard-options">{activeMasterStandards.map((row) => <option key={row.id} value={row.code}>{row.title || row.code}</option>)}</datalist>
+        </label>
+        <label>
+          Manufacturer / brand
+          <input aria-label="Manufacturer or brand" list="item-manufacturer-options" value={approvedMake} onChange={(e) => setApprovedMake(e.target.value)} maxLength={200} />
+          <datalist id="item-manufacturer-options">{activeMasterManufacturers.map((row) => <option key={row.id} value={row.name}>{row.code}</option>)}</datalist>
+        </label>
+        <label>
+          Model number
+          <input aria-label="Model number" value={modelNumber} onChange={(e) => setModelNumber(e.target.value)} maxLength={120} />
+        </label>
+        <label>
+          Manufacturer part number
+          <input aria-label="Manufacturer part number" value={manufacturerPartNumber} onChange={(e) => setManufacturerPartNumber(e.target.value)} maxLength={120} />
+        </label>
+        <label>
+          HSN code
+          <input aria-label="HSN code" value={hsnCode} onChange={(e) => setHsnCode(e.target.value)} maxLength={20} />
+        </label>
+        <label>
+          Preferred supplier
+          <select aria-label="Preferred supplier" value={preferredVendorId || ""} onChange={(e) => setPreferredVendorId(Number(e.target.value) || 0)}>
+            <option value="">None</option>
+            {vendorRows.filter((row) => row.approval_status === "Approved").map((row) => (
+              <option key={row.id} value={row.id}>{row.code} · {row.company}</option>
+            ))}
+          </select>
         </label>
         <label>
           <input type="checkbox" checked={inspection} onChange={(e) => setInspection(e.target.checked)} /> Inspection required
         </label>
+        <label>
+          <input type="checkbox" checked={tracking} onChange={(e) => setTracking(e.target.checked)} /> Tracking required
+        </label>
+        <label>
+          <input type="checkbox" checked={mtcRequired} onChange={(e) => setMtcRequired(e.target.checked)} /> Material test certificate required
+        </label>
+        <label>
+          <input type="checkbox" checked={calibrationRequired} onChange={(e) => setCalibrationRequired(e.target.checked)} /> Calibration certificate required
+        </label>
+        <label>
+          <input type="checkbox" checked={shelfLifeApplicable} onChange={(e) => setShelfLifeApplicable(e.target.checked)} /> Shelf life applicable
+        </label>
+        {shelfLifeApplicable && <label>
+          Shelf life (days)
+          <input aria-label="Shelf life days" type="number" min={1} value={shelfLifeDays} onChange={(e) => setShelfLifeDays(e.target.value)} required />
+        </label>}
         {specFields.length > 0 && <fieldset><legend>Technical specifications — {category}</legend>
-          {specFields.map((field) => <label key={field.key}>{field.label}{field.required ? " *" : ""}
+          {specFields.map((field) => <label key={field.key}>{field.label}{field.unit ? ` (${field.unit})` : ""}{field.required ? " *" : ""}
+            {field.help_text ? <small className="muted">{field.help_text}</small> : null}
             {field.type === "select" ? <select aria-label={field.label} required={field.required} value={specAttributes[field.key] || ""} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: e.target.value }))}><option value="">Select an option</option>{(field.options || []).map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select>
               : field.type === "boolean" ? <select aria-label={field.label} required={field.required} value={specAttributes[field.key] || ""} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: e.target.value }))}><option value="">Select</option><option value="true">Yes</option><option value="false">No</option></select>
-                : <input type={field.type === "number" ? "number" : "text"} step={field.type === "number" ? "any" : undefined} required={field.required} aria-label={field.label} value={specAttributes[field.key] || ""} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: e.target.value }))} />}
+                : field.type === "multiselect" ? <select multiple aria-label={field.label} required={field.required} value={String(specAttributes[field.key] || "").split("|").filter(Boolean)} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: Array.from(e.target.selectedOptions).map((option) => option.value).join("|") }))}>{(field.options || []).map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select>
+                  : <input type={field.type === "number" || field.type === "decimal" ? "number" : field.type === "date" ? "date" : "text"} step={field.type === "decimal" ? "any" : field.type === "number" ? "1" : undefined} required={field.required} aria-label={field.label} value={specAttributes[field.key] || ""} onChange={(e) => setSpecAttributes((old) => ({ ...old, [field.key]: e.target.value }))} />}
           </label>)}
         </fieldset>}
-        <button type="submit" className="tone-submit">Save item</button>
-      </form>
-      <section className="option-grid" aria-label="Catalogue item approval">
-        <h3 className="section-mark">Catalogue Item Review</h3>
-        <p>Draft items must be submitted before use. Only authorized reviewers can approve or reject. Decisions are enforced by the backend and cannot be made by the creator or submitter.</p>
-        <label>Catalogue item
-          <select aria-label="Review catalogue item" value={reviewItemId} onChange={(event) => { setReviewItemId(Number(event.target.value)); setReviewMessage(""); setDecisionReason(""); }}>
-            {catalogueReviewItems.length === 0 && <option value={0}>No catalogue items</option>}
-            {catalogueReviewItems.map((item) => <option key={item.id} value={item.id}>{item.code} — {item.description} ({item.approval_status})</option>)}
-          </select>
+        {duplicateWarning && <article className={`note-card ${duplicateExact.length ? "note-alert" : "note-good"}`} role="status">
+          <p>{duplicateWarning}</p>
+          {duplicateExact.length > 0 && <ul>{duplicateExact.map((row) => <li key={row.code}><strong>{row.code}</strong>{row.description ? ` · ${row.description}` : ""} (exact)</li>)}</ul>}
+          {duplicatePossible.length > 0 && <ul>{duplicatePossible.map((row) => <li key={row.code}><strong>{row.code}</strong>{row.description ? ` · ${row.description}` : ""} (possible)</li>)}</ul>}
+        </article>}
+        <label>
+          <input type="checkbox" checked={allowDuplicate} onChange={(e) => setAllowDuplicate(e.target.checked)} /> Allow exact duplicate (requires justification in audit / use only when intentional)
         </label>
-        {selectedReviewItem && <>
-          <p><strong>Approval status:</strong> {selectedReviewItem.approval_status} · <strong>Active:</strong> {selectedReviewItem.active ? "Yes" : "No"} · <strong>Version:</strong> {selectedReviewItem.version}</p>
-          {(["Draft", "Rejected"].includes(selectedReviewItem.approval_status)) &&
-            <button type="button" disabled={reviewBusy} onClick={() => void catalogueReviewAction("Submit")}>Submit item for approval</button>}
-          {selectedReviewItem.approval_status === "Pending Approval" && catalogueApprovalAllowed && <>
-            <label>Decision reason (required)
-              <textarea aria-label="Catalogue decision reason" required minLength={3} maxLength={2000} value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} />
-            </label>
-            <button type="button" disabled={reviewBusy || decisionReason.trim().length < 3} onClick={() => void catalogueReviewAction("Approve")}>Approve item</button>
-            <button type="button" disabled={reviewBusy || decisionReason.trim().length < 3} onClick={() => void catalogueReviewAction("Reject")}>Reject item</button>
-          </>}
-        </>}
+        <div className="inline">
+          <button type="button" className="tone-note" onClick={() => void checkDuplicates()}>Check duplicates</button>
+          <button type="submit" className="tone-submit">{editingItemId != null ? "Update item" : "Save item"}</button>
+          {editingItemId != null && <button type="button" className="tone-note" onClick={resetItemForm}>Cancel edit</button>}
+        </div>
+      </form>
+      <section className="panel" aria-label="Catalogue item approval">
+        <h3 className="section-mark"><ListChecks size={18} strokeWidth={2.4} /> Catalogue Item Review</h3>
+        <p>Draft items must be submitted before use. Only authorized reviewers can approve or reject. Decisions are enforced by the backend and cannot be made by the creator or submitter.</p>
+        <div className="catalogue-toolbar">
+          <label>Search
+            <input aria-label="Catalogue search" value={itemSearch} onChange={(event) => setItemSearch(event.target.value)} placeholder="Code, description, MPN…" />
+          </label>
+          <label>Status
+            <select aria-label="Catalogue status filter" value={itemFilter} onChange={(event) => setItemFilter(event.target.value)}>
+              {["All", "Draft", "Under Review", "Pending Approval", "Approved", "Rejected"].map((status) => <option key={status} value={status}>{status}</option>)}
+            </select>
+          </label>
+          <label>Type
+            <select aria-label="Catalogue type filter" value={typeFilter} onChange={(event) => setTypeFilter(event.target.value)}>
+              {["All", "Material", "Equipment", "Consumable", "Spare", "Tool"].map((type) => <option key={type} value={type}>{type}</option>)}
+            </select>
+          </label>
+          <label>Discipline
+            <select aria-label="Catalogue discipline filter" value={disciplineFilter || ""} onChange={(event) => setDisciplineFilter(Number(event.target.value) || 0)}>
+              <option value="">All</option>
+              {catalog.disciplines.map((row) => <option key={row.id} value={row.id}>{row.name}</option>)}
+            </select>
+          </label>
+          <label>Category
+            <select aria-label="Catalogue category filter" value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)}>
+              <option value="">All</option>
+              {catalogueCategories.map((name) => <option key={name} value={name}>{name}</option>)}
+            </select>
+          </label>
+          <div className="inline">
+            <button type="button" className="tone-note" disabled={reviewBusy} onClick={() => void refreshCatalogueReviewItems().catch((error) => onError((error as Error).message))}>Refresh catalogue</button>
+            <button type="button" className="tone-note" disabled={exchangeBusy} onClick={() => void downloadCatalogue("export")}><Download size={14} /> Export Excel</button>
+            <button type="button" className="tone-note" disabled={exchangeBusy} onClick={() => void downloadCatalogue("export-csv")}><Download size={14} /> Export CSV</button>
+            <button type="button" className="tone-note" disabled={exchangeBusy} onClick={() => void downloadCatalogue("template")}><FileSpreadsheet size={14} /> Client import pack</button>
+          </div>
+          <p className="muted">Client import pack = blank Catalogue sheet + Allowed_Masters list for this organization. Scroll to Import items to upload the filled file.</p>
+        </div>
+        {catalogueReviewItems.length === 0 ? (
+          <article className="note-card note-alert"><p>No catalogue items yet. Save an item above to begin review.</p></article>
+        ) : filteredCatalogueItems.length === 0 ? (
+          <article className="note-card"><p>No items match this status filter.</p></article>
+        ) : (
+          <div className="catalogue-list catalogue-list-scroll" role="list" aria-label="Catalogue items">
+            {filteredCatalogueItems.map((item) => (
+              <div
+                key={item.id}
+                className={`catalogue-row${reviewItemId === item.id ? " is-selected" : ""}`}
+                role="listitem"
+                tabIndex={0}
+                aria-pressed={reviewItemId === item.id}
+                onClick={() => { setReviewItemId(item.id); setReviewMessage(""); setDecisionReason(""); }}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setReviewItemId(item.id);
+                    setReviewMessage("");
+                    setDecisionReason("");
+                  }
+                }}
+              >
+                <div className="catalogue-row-main">
+                  <strong>{item.code}</strong> · {item.description} <Pill value={item.approval_status} />
+                  <p className="muted">{item.item_type} · {[item.category, item.subcategory].filter(Boolean).join(" / ") || "No category"} · {item.base_unit}{(item.purchase_unit && item.purchase_unit !== item.base_unit) ? ` / buy ${item.purchase_unit}` : ""}{(item.issue_unit && item.issue_unit !== item.base_unit) ? ` / issue ${item.issue_unit}` : ""} · v{item.version} · {item.active ? "Active" : "Inactive"}{item.manufacturer_part_number ? ` · MPN ${item.manufacturer_part_number}` : ""}</p>
+                </div>
+                <div className="catalogue-row-actions">
+                  {["Draft", "Rejected"].includes(item.approval_status) && (
+                    <button type="button" className="tone-note" onClick={(event) => { event.stopPropagation(); beginEditItem(item); }}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                  )}
+                  {["Draft", "Rejected"].includes(item.approval_status) && reviewItemId === item.id && (
+                    <button type="button" className="tone-submit" disabled={reviewBusy} onClick={(event) => { event.stopPropagation(); void catalogueReviewAction("Submit"); }}>
+                      Submit
+                    </button>
+                  )}
+                  {item.approval_status === "Approved" && (
+                    <button
+                      type="button"
+                      className={item.active ? "tone-reject" : "tone-approve"}
+                      onClick={(event) => { event.stopPropagation(); void setItemActive(item, !item.active); }}
+                    >
+                      {item.active ? "Deactivate" : "Activate"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+        {selectedReviewItem?.approval_status === "Approved" && (
+          <label>Activation reason
+            <input aria-label="Catalogue activation reason" value={activationReason} onChange={(event) => setActivationReason(event.target.value)} placeholder="Required when activating or deactivating" maxLength={500} />
+          </label>
+        )}
+        {selectedReviewItem && (
+          <article className="note-card">
+            <h4>Selected: {selectedReviewItem.code}</h4>
+            <p><Pill value={selectedReviewItem.approval_status} /> · Active: {selectedReviewItem.active ? "Yes" : "No"} · Version: {selectedReviewItem.version}</p>
+            {itemIsPendingReview && !catalogueApprovalAllowed && (
+              <p className="muted" role="status">This item is waiting for a catalogue approver. Your role can submit and amend, but cannot record the approval decision.</p>
+            )}
+            {itemIsPendingReview && catalogueApprovalAllowed && (
+              <fieldset disabled={reviewBusy}>
+                <legend>Approval decision</legend>
+                <label>Decision reason (required)
+                  <textarea aria-label="Catalogue decision reason" required minLength={decisionReasonMinLength} maxLength={2000} value={decisionReason} onChange={(event) => setDecisionReason(event.target.value)} />
+                </label>
+                <div className="inline">
+                  <button type="button" className="tone-approve" disabled={reviewBusy || decisionReason.trim().length < decisionReasonMinLength} onClick={() => void catalogueReviewAction("Approve")}>Approve item</button>
+                  <button type="button" className="tone-reject" disabled={reviewBusy || decisionReason.trim().length < decisionReasonMinLength} onClick={() => void catalogueReviewAction("Reject")}>Reject item</button>
+                </div>
+              </fieldset>
+            )}
+            <h4>Attachments / certificates</h4>
+            <p className="muted">Upload supporting documents while the item is Draft or Rejected. Existing procurement file storage is reused.</p>
+            {["Draft", "Rejected"].includes(selectedReviewItem.approval_status) && (
+              <input
+                aria-label="Catalogue item attachment"
+                type="file"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (!file) return;
+                  const body = new FormData();
+                  body.set("upload", file);
+                  void postForm(`/procurement/items/${selectedReviewItem.id}/files`, body)
+                    .then(() => loadItemFiles(selectedReviewItem.id))
+                    .catch((err) => onError((err as Error).message));
+                  event.target.value = "";
+                }}
+              />
+            )}
+            {itemFiles.length === 0 ? <p>No attachments.</p> : (
+              <ul>
+                {itemFiles.map((file) => (
+                  <li key={file.id}>
+                    <button type="button" className="tone-note" onClick={() => void downloadFile(`/procurement/files/${file.id}`, file.name).catch((err) => onError((err as Error).message))}>
+                      {file.name}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </article>
+        )}
         {reviewMessage && <p role="status">{reviewMessage}</p>}
-        <button type="button" disabled={reviewBusy} onClick={() => void refreshCatalogueReviewItems().catch((error) => onError((error as Error).message))}>Refresh catalogue review</button>
         <h4>Review history</h4>
         {reviewHistory.length === 0 ? <p>No review decisions recorded.</p> : <table><thead><tr><th>When</th><th>Action</th><th>Reviewer ID</th><th>Reason</th><th>Version</th></tr></thead><tbody>
           {reviewHistory.map((event, index) => <tr key={`${event.created_at}-${index}`}><td>{new Date(event.created_at).toLocaleString()}</td><td>{event.action}</td><td>{event.actor_id}</td><td>{event.reason}</td><td>{event.item_version}</td></tr>)}
@@ -1701,48 +2558,82 @@ function Masters({
         {selectedReviewItem?.approval_status === "Approved" && !pendingAmendment && <fieldset disabled={amendmentBusy}>
           <legend>Request technical change</legend>
           <label>Field to change
-            <select aria-label="Amendment field" value={amendmentField} onChange={(event) => { setAmendmentField(event.target.value); setAmendmentValue(""); }}>
+            <select aria-label="Amendment field" value={amendmentField} onChange={(event) => {
+              const next = event.target.value;
+              setAmendmentField(next);
+              if (next === "specification_attributes" && selectedReviewItem) {
+                setAmendmentValue(JSON.stringify(selectedReviewItem.specification_attributes || {}, null, 2));
+              } else if (next === "specification") {
+                setAmendmentValue(selectedReviewItem?.specification || "");
+              } else if (next === "size_rating") {
+                setAmendmentValue(selectedReviewItem?.size_rating || "");
+              } else if (next === "approved_make") {
+                setAmendmentValue(selectedReviewItem?.approved_make || "");
+              } else if (next === "inspection_required") {
+                setAmendmentValue(String(Boolean(selectedReviewItem?.inspection_required)));
+              } else if (next === "tracking_required") {
+                setAmendmentValue(String(Boolean(selectedReviewItem?.tracking_required)));
+              } else {
+                setAmendmentValue("");
+              }
+            }}>
               <option value="specification">Specification description</option>
               <option value="specification_attributes">Structured specifications (JSON)</option>
               <option value="size_rating">Size / rating</option>
-              <option value="approved_make">Approved make</option>
+              <option value="material_grade">Material grade</option>
+              <option value="applicable_standard">Applicable standard</option>
+              <option value="approved_make">Manufacturer / brand</option>
+              <option value="model_number">Model number</option>
+              <option value="manufacturer_part_number">Manufacturer part number</option>
+              <option value="hsn_code">HSN code</option>
               <option value="inspection_required">Inspection required (true/false)</option>
               <option value="tracking_required">Tracking required (true/false)</option>
+              <option value="mtc_required">MTC required (true/false)</option>
+              <option value="calibration_certificate_required">Calibration certificate required (true/false)</option>
+              <option value="shelf_life_applicable">Shelf life applicable (true/false)</option>
             </select>
           </label>
           <label>Proposed value
             <textarea aria-label="Proposed amendment value" value={amendmentValue} onChange={(event) => setAmendmentValue(event.target.value)} maxLength={amendmentField === "specification_attributes" ? undefined : 2000} placeholder={amendmentField === "specification_attributes" ? '{"flow_capacity":60}' : "Enter proposed value"} />
           </label>
+          {amendmentField === "specification_attributes" && <p className="muted">Use a JSON object matching the category template fields. Invalid keys are rejected by the server.</p>}
           <label>Reason for amendment (required)
             <textarea aria-label="Amendment request reason" value={amendmentReason} onChange={(event) => setAmendmentReason(event.target.value)} maxLength={2000} />
           </label>
-          <button type="button" disabled={!amendmentReason.trim() || !amendmentValue.trim()} onClick={() => void requestAmendment()}>Submit amendment request</button>
+          <button type="button" className="tone-submit" disabled={!amendmentReason.trim() || !amendmentValue.trim()} onClick={() => void requestAmendment()}>Submit amendment request</button>
         </fieldset>}
         {pendingAmendment && <p role="status">Amendment #{pendingAmendment.id} is pending approval. The active item remains unchanged.</p>}
+        {pendingAmendment && !catalogueApprovalAllowed && (
+          <p className="muted" role="status">A catalogue approver must decide this amendment. You do not currently have approval permission.</p>
+        )}
         {pendingAmendment && catalogueApprovalAllowed && <fieldset disabled={amendmentBusy}>
           <legend>Decide pending amendment #{pendingAmendment.id}</legend>
           <label>Decision reason (required)
             <textarea aria-label="Amendment decision reason" minLength={3} maxLength={2000} value={amendmentDecisionReason} onChange={(event) => setAmendmentDecisionReason(event.target.value)} />
           </label>
-          <button type="button" disabled={amendmentDecisionReason.trim().length < 3} onClick={() => void decideAmendment(pendingAmendment.id, "Approve")}>Approve amendment</button>
-          <button type="button" disabled={amendmentDecisionReason.trim().length < 3} onClick={() => void decideAmendment(pendingAmendment.id, "Reject")}>Reject amendment</button>
+          <div className="inline">
+            <button type="button" className="tone-approve" disabled={amendmentDecisionReason.trim().length < 3} onClick={() => void decideAmendment(pendingAmendment.id, "Approve")}>Approve amendment</button>
+            <button type="button" className="tone-reject" disabled={amendmentDecisionReason.trim().length < 3} onClick={() => void decideAmendment(pendingAmendment.id, "Reject")}>Reject amendment</button>
+          </div>
           <p>Approvers cannot approve amendments they created or submitted. The server enforces this restriction.</p>
         </fieldset>}
         {amendmentMessage && <p role="status">{amendmentMessage}</p>}
-        <button type="button" disabled={!reviewItemId || amendmentBusy} onClick={() => void loadAmendments(reviewItemId).catch((error) => setAmendmentMessage((error as Error).message))}>Refresh amendments</button>
+        <button type="button" className="tone-note" disabled={!reviewItemId || amendmentBusy} onClick={() => void loadAmendments(reviewItemId).catch((error) => setAmendmentMessage((error as Error).message))}>Refresh amendments</button>
         {amendments.length === 0 ? <p>No amendment requests for this item.</p> : <table><thead><tr><th>ID</th><th>Status</th><th>Base version</th><th>Proposed changes</th><th>Request reason</th><th>Submitted by</th><th>Decision</th></tr></thead><tbody>
-          {amendments.map((row) => <tr key={row.id}><td>{row.id}</td><td>{row.status}</td><td>{row.base_version}</td><td><pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "300px" }}>{JSON.stringify(row.changes, null, 2)}</pre></td><td>{row.reason}</td><td>{row.submitted_by}</td><td>{row.decided_by == null ? "Pending" : `${row.decided_by}: ${row.decision_reason || "—"}`}</td></tr>)}
+          {amendments.map((row) => <tr key={row.id}><td>{row.id}</td><td><Pill value={row.status} /></td><td>{row.base_version}</td><td><pre className="catalogue-snapshot">{JSON.stringify(row.changes, null, 2)}</pre></td><td>{row.reason}</td><td>{row.submitted_by}</td><td>{row.decided_by == null ? "Pending" : `${row.decided_by}: ${row.decision_reason || "—"}`}</td></tr>)}
         </tbody></table>}
         <h4>Technical specification history</h4>
         <p>Read-only item snapshots. Prior approved specifications remain visible; modifying an approved item requires a separately authorized amendment workflow.</p>
-        <button type="button" disabled={!reviewItemId || specHistoryBusy} onClick={() => {
-          if (!showSpecHistory) {
-            setShowSpecHistory(true);
-            void loadCatalogueSpecHistory(reviewItemId);
-          } else { setShowSpecHistory(false); }
-        }}>{showSpecHistory ? "Hide specification history" : "View specification history"}</button>
+        <div className="inline">
+          <button type="button" className="tone-note" disabled={!reviewItemId || specHistoryBusy} onClick={() => {
+            if (!showSpecHistory) {
+              setShowSpecHistory(true);
+              void loadCatalogueSpecHistory(reviewItemId);
+            } else { setShowSpecHistory(false); }
+          }}>{showSpecHistory ? "Hide specification history" : "View specification history"}</button>
+          {showSpecHistory && <button type="button" className="tone-note" disabled={specHistoryBusy} onClick={() => void loadCatalogueSpecHistory(reviewItemId)}>Refresh specification history</button>}
+        </div>
         {showSpecHistory && <>
-          <button type="button" disabled={specHistoryBusy} onClick={() => void loadCatalogueSpecHistory(reviewItemId)}>Refresh specification history</button>
           {specHistoryBusy && <p role="status">Loading specification history...</p>}
           {specHistoryError && <p role="alert">Unable to load specification history: {specHistoryError}</p>}
           {!specHistoryBusy && !specHistoryError && specHistory.length === 0 && <p>No specification history recorded for this item.</p>}
@@ -1750,14 +2641,14 @@ function Masters({
             {specHistory.map((entry) => <tr key={entry.sequence}>
               <td>{entry.sequence}</td><td>{entry.created_at ? new Date(entry.created_at).toLocaleString() : "—"}</td>
               <td>{entry.event}</td><td>{entry.item_version}</td><td>{entry.actor_id}</td><td>{entry.reason || "—"}</td>
-              <td><button type="button" aria-label={`Toggle specification snapshot ${entry.sequence}`} onClick={() => setExpandedSpecSnapshot((old) => old === entry.sequence ? null : entry.sequence)}>{expandedSpecSnapshot === entry.sequence ? "Hide" : "View"}</button>
-                {expandedSpecSnapshot === entry.sequence && <pre style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere", maxWidth: "460px" }}>{JSON.stringify(entry.snapshot, null, 2)}</pre>}</td>
+              <td><button type="button" className="tone-note" aria-label={`Toggle specification snapshot ${entry.sequence}`} onClick={() => setExpandedSpecSnapshot((old) => old === entry.sequence ? null : entry.sequence)}>{expandedSpecSnapshot === entry.sequence ? "Hide" : "View"}</button>
+                {expandedSpecSnapshot === entry.sequence && <pre className="catalogue-snapshot">{JSON.stringify(entry.snapshot, null, 2)}</pre>}</td>
             </tr>)}
           </tbody></table>}
         </>}
       </section>
       {context.access.admin && <form className="option-grid" onSubmit={(event) => void saveTemplate(event)}>
-        <h3 className="section-mark">Specification Template Master (Organization Admin)</h3>
+        <h3 className="section-mark"><ClipboardCheck size={18} strokeWidth={2.4} /> Specification Template Master (Organization Admin)</h3>
         <p>Configure specification fields for your organization. Existing built-in templates remain as fallbacks. Changes to a live template can affect future item validation; review carefully before saving.</p>
         <label>Discipline
           <select aria-label="Template discipline" value={discipline} onChange={(e) => { setDiscipline(Number(e.target.value)); setTemplateCategory(""); setEditableFields([]); }}>
@@ -1772,13 +2663,15 @@ function Masters({
           <legend>Field {index + 1}</legend>
           <label>Key <input aria-label={`Specification field ${index + 1} key`} pattern="[a-z][a-z0-9_]*" required value={field.key} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, key: e.target.value } : f))} /></label>
           <label>Label <input aria-label={`Specification field ${index + 1} label`} required value={field.label} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, label: e.target.value } : f))} /></label>
-          <label>Type <select aria-label={`Specification field ${index + 1} type`} value={field.type} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, type: e.target.value as SpecificationField["type"], options: e.target.value === "select" ? f.options : [] } : f))}>{["text", "number", "boolean", "select"].map((t) => <option key={t}>{t}</option>)}</select></label>
+          <label>Type <select aria-label={`Specification field ${index + 1} type`} value={field.type} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, type: e.target.value as SpecificationField["type"], options: e.target.value === "select" || e.target.value === "multiselect" ? f.options : [] } : f))}>{["text", "number", "decimal", "boolean", "date", "select", "multiselect"].map((t) => <option key={t}>{t}</option>)}</select></label>
           <label><input type="checkbox" checked={field.required} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, required: e.target.checked } : f))} /> Required</label>
           {field.type === "select" && <label>Options (one per line)<textarea aria-label={`Specification field ${index + 1} options`} value={field.options.join("\n")} onChange={(e) => setEditableFields((old) => old.map((f, i) => i === index ? { ...f, options: e.target.value.split("\n").map((v) => v.trim()).filter(Boolean) } : f))} /></label>}
-          <button type="button" onClick={() => setEditableFields((old) => old.filter((_, i) => i !== index))}>Remove field</button>
+          <button type="button" className="tone-reject" onClick={() => setEditableFields((old) => old.filter((_, i) => i !== index))}>Remove field</button>
         </fieldset>)}
-        <button type="button" onClick={() => setEditableFields((old) => [...old, { key: "", label: "", type: "text", required: false, options: [] }])}>Add specification field</button>
-        <button type="submit" className="tone-submit" disabled={templateSaving || !templateCategory.trim() || editableFields.length === 0}>{templateSaving ? "Saving..." : "Save organization template"}</button>
+        <div className="inline">
+          <button type="button" className="tone-note" onClick={() => setEditableFields((old) => [...old, { key: "", label: "", type: "text", required: false, options: [] }])}>Add specification field</button>
+          <button type="submit" className="tone-submit" disabled={templateSaving || !templateCategory.trim() || editableFields.length === 0}>{templateSaving ? "Saving..." : "Save organization template"}</button>
+        </div>
       </form>}
       <form
         className="option-grid"
@@ -1890,18 +2783,51 @@ function Masters({
         </label>
         <button type="submit" className="tone-submit">Save warehouse</button>
       </form>
-      <ItemImport onError={onError} onSaved={onSaved} />
+      <ItemImport
+        onError={onError}
+        onSaved={onSaved}
+        disciplines={catalog.disciplines.map((row) => row.name)}
+        categories={masterCategories.filter((row) => row.active).map((row) => ({
+          discipline: row.discipline,
+          name: row.name,
+          subcategories: row.subcategories.filter((sub) => sub.active).map((sub) => sub.name),
+        }))}
+        uoms={masterUoms.filter((row) => row.active).map((row) => row.code)}
+        grades={masterGrades.filter((row) => row.active).map((row) => row.code)}
+        standards={masterStandards.filter((row) => row.active).map((row) => row.code)}
+        manufacturers={masterManufacturers.filter((row) => row.active).map((row) => row.code || row.name)}
+      />
     </>
   );
 }
 
-function ItemImport({ onError, onSaved }: { onError: (text: string) => void; onSaved: () => void }) {
+function ItemImport({
+  onError,
+  onSaved,
+  disciplines,
+  categories,
+  uoms,
+  grades,
+  standards,
+  manufacturers,
+}: {
+  onError: (text: string) => void;
+  onSaved: () => void;
+  disciplines: string[];
+  categories: { discipline: string; name: string; subcategories: string[] }[];
+  uoms: string[];
+  grades: string[];
+  standards: string[];
+  manufacturers: string[];
+}) {
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState("");
+  const [busy, setBusy] = useState(false);
   async function send(mode: string) {
-    if (!file) return;
+    if (!file || busy) return;
     const body = new FormData();
     body.set("upload", file);
+    setBusy(true);
     try {
       const result = await postForm<{ errors: { row: number; messages: string[] }[]; saved: number }>(
         `/procurement/items/import?mode=${mode}`,
@@ -1911,17 +2837,59 @@ function ItemImport({ onError, onSaved }: { onError: (text: string) => void; onS
         setPreview(result.errors.map((row) => `Row ${row.row}: ${row.messages.join(", ")}`).join(" "));
         return;
       }
-      setPreview(mode === "preview" ? `${result.saved === 0 ? "Preview found no errors." : ""}` : `Saved ${result.saved}.`);
+      if (mode === "preview") {
+        setPreview("Preview found no errors.");
+      } else if (mode === "update") {
+        setPreview(`Updated ${result.saved} existing item${result.saved === 1 ? "" : "s"}.`);
+      } else {
+        setPreview(`Saved ${result.saved} new item${result.saved === 1 ? "" : "s"}.`);
+      }
       if (mode !== "preview") onSaved();
       onError("");
     } catch (err) {
       onError((err as Error).message);
+    } finally {
+      setBusy(false);
     }
   }
+  const mastersActive = categories.length > 0 || uoms.length > 0 || grades.length > 0 || standards.length > 0 || manufacturers.length > 0;
+  const categoriesByDiscipline = categories.reduce<Record<string, string[]>>((acc, row) => {
+    acc[row.discipline] = acc[row.discipline] || [];
+    acc[row.discipline].push(
+      row.subcategories.length ? `${row.name} (${row.subcategories.join(", ")})` : row.name,
+    );
+    return acc;
+  }, {});
   return (
     <section className="panel">
       <h3 className="section-mark"><FileSpreadsheet size={18} strokeWidth={2.4} /> Import items</h3>
-      <p>Preview checks the workbook before anything is saved. An existing item code is rejected unless you choose update. Import does not approve a requirement or post stock.</p>
+      <p>Send clients the <strong>Client import pack</strong> (Catalogue sheet + Allowed_Masters). They copy exact master values into Catalogue, then you upload here. Keep row-1 headers unchanged. Required: code, description, type, category, disciplines, unit. Delete SAMPLE-001 before Confirm. After import: Submit → Approve before purchase use.</p>
+      <div className="catalogue-master-hint catalogue-list-scroll" role="note">
+        <strong>Allowed master values (same list embedded in the Excel pack)</strong>
+        <ul>
+          <li><strong>disciplines</strong> — {disciplines.join(", ") || "none configured"}</li>
+          {Object.keys(categoriesByDiscipline).length === 0 ? (
+            <li><strong>category</strong> — none yet. Seed or create Catalogue reference masters first.</li>
+          ) : (
+            Object.entries(categoriesByDiscipline).map(([discipline, names]) => (
+              <li key={discipline}><strong>{discipline} categories</strong> — {names.join(", ")}</li>
+            ))
+          )}
+          <li><strong>unit / purchase_unit / issue_unit</strong> — {uoms.length ? uoms.join(", ") : "no UOM masters yet"}</li>
+          <li><strong>material_grade</strong> — {grades.length ? grades.join(", ") : "optional / none"}</li>
+          <li><strong>standard</strong> — {standards.length ? standards.join(", ") : "optional / none"}</li>
+          <li><strong>make</strong> — {manufacturers.length ? manufacturers.join(", ") : "optional / none"}</li>
+        </ul>
+        {!mastersActive ? <p className="muted">Tip: use Seed categories from templates in Catalogue reference masters, then download the client pack again.</p> : null}
+      </div>
+      <div className="catalogue-toolbar">
+        <button type="button" className="tone-note" disabled={busy} onClick={() => void downloadFile("/procurement/items/template", "catalogue-import-pack.xlsx").catch((err) => onError((err as Error).message))}>
+          <Download size={14} /> Download client import pack
+        </button>
+        <button type="button" className="tone-note" disabled={busy} onClick={() => void downloadFile("/procurement/items/export.xlsx", "catalogue-items.xlsx").catch((err) => onError((err as Error).message))}>
+          <Download size={14} /> Download current catalogue
+        </button>
+      </div>
       <input
         aria-label="Item import file"
         type="file"
@@ -1929,14 +2897,17 @@ function ItemImport({ onError, onSaved }: { onError: (text: string) => void; onS
         onChange={(e) => setFile(e.target.files?.[0] || null)}
       />
       <div className="inline">
-        <button type="button" className="tone-note" onClick={() => void send("preview")}>
+        <button type="button" className="tone-note" disabled={!file || busy} onClick={() => void send("preview")}>
           Preview
         </button>
-        <button type="button" className="tone-approve" onClick={() => void send("confirm")}>
+        <button type="button" className="tone-approve" disabled={!file || busy} onClick={() => void send("confirm")}>
           Confirm new items
         </button>
+        <button type="button" className="tone-submit" disabled={!file || busy} onClick={() => void send("update")}>
+          Update existing items
+        </button>
       </div>
-      {preview ? <p>{preview}</p> : null}
+      {preview ? <p role="status">{preview}</p> : null}
     </section>
   );
 }
@@ -3062,10 +4033,40 @@ type StockBalance = {
   returned: string;
 };
 
+type AcceptLine = {
+  goods_receipt_line_id: number;
+  item_code: string;
+  remaining: string;
+  unit: string;
+  quality_accepted?: string;
+  stores_accepted?: string;
+  accept_allowed?: string;
+  handoff_done?: boolean;
+  blocker?: string | null;
+};
 type AcceptSource = {
   goods_receipt_id: number;
   number: string;
-  lines: { goods_receipt_line_id: number; item_code: string; remaining: string; unit: string }[];
+  warehouse_id?: number | null;
+  lines: AcceptLine[];
+};
+type AcceptSourcesPayload = {
+  lot_writer_cutover: boolean;
+  waiting_on_quality: number;
+  waiting_on_handoff: number;
+  ready_to_accept: number;
+  sources: AcceptSource[];
+  lot_sources: {
+    lot_id: number;
+    lot_code: string;
+    warehouse_id: number;
+    item_code: string;
+    unit: string;
+    accept_allowed: string;
+    batch_number?: string;
+    heat_number?: string;
+  }[];
+  note: string;
 };
 
 type IssueSource = {
@@ -3101,6 +4102,7 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
   const [balances, setBalances] = useState<StockBalance[]>([]);
   const [postings, setPostings] = useState<StockPosting[]>([]);
   const [acceptSources, setAcceptSources] = useState<AcceptSource[]>([]);
+  const [acceptMeta, setAcceptMeta] = useState<Omit<AcceptSourcesPayload, "sources"> | null>(null);
   const [issueSources, setIssueSources] = useState<IssueSource[]>([]);
   const [ready, setReady] = useState(false);
   const [action, setAction] = useState("Accept");
@@ -3114,6 +4116,8 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
   const [recipient, setRecipient] = useState("");
   const [returnQty, setReturnQty] = useState<Record<number, string>>({});
   const [acceptQty, setAcceptQty] = useState<Record<number, string>>({});
+  const [lotId, setLotId] = useState("");
+  const [lotQty, setLotQty] = useState("");
   const [packages, setPackages] = useState<OpenPackage[]>([]);
   const [packageId, setPackageId] = useState("");
   const [reservationId, setReservationId] = useState("");
@@ -3124,17 +4128,32 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
     (row) => row.kind === "Reservation" && row.status === "Posted" && String(row.warehouse_id) === warehouseId,
   );
   const reservation = reservations.find((row) => String(row.id) === reservationId);
+  const lotSources = acceptMeta?.lot_sources || [];
+  const selectedLot = lotSources.find((row) => String(row.lot_id) === lotId);
   async function reload() {
-    const [rows, moves, accepts, issues, open] = await Promise.all([
+    const [rows, moves, acceptsRaw, issues, open] = await Promise.all([
       api<StockBalance[]>(`/projects/${pid}/procurement/stock`),
       api<StockPosting[]>(`/projects/${pid}/procurement/stock/postings`),
-      api<AcceptSource[]>(`/projects/${pid}/procurement/stock/accept-sources`),
+      api<AcceptSourcesPayload | AcceptSource[]>(`/projects/${pid}/procurement/stock/accept-sources`),
       api<IssueSource[]>(`/projects/${pid}/procurement/stock/issue-sources`),
       api<OpenPackage[]>(`/projects/${pid}/construction/packages`).catch(() => [] as OpenPackage[]),
     ]);
     setBalances(rows);
     setPostings(moves);
-    setAcceptSources(accepts);
+    if (Array.isArray(acceptsRaw)) {
+      setAcceptSources(acceptsRaw);
+      setAcceptMeta(null);
+    } else {
+      setAcceptSources(acceptsRaw.sources || []);
+      setAcceptMeta({
+        lot_writer_cutover: acceptsRaw.lot_writer_cutover,
+        waiting_on_quality: acceptsRaw.waiting_on_quality,
+        waiting_on_handoff: acceptsRaw.waiting_on_handoff,
+        ready_to_accept: acceptsRaw.ready_to_accept,
+        lot_sources: acceptsRaw.lot_sources || [],
+        note: acceptsRaw.note,
+      });
+    }
     setIssueSources(issues);
     setPackages(open.filter((row) => !["Cancelled", "Handed Over"].includes(row.status)));
     setReady(true);
@@ -3146,14 +4165,36 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
     event.preventDefault();
     try {
       if (action === "Accept") {
-        await api(`/projects/${pid}/procurement/stock/acceptances`, "POST", {
-          number,
-          warehouse_id: Number(warehouseId),
-          goods_receipt_id: Number(receiptId),
-          lines: (receipt?.lines || [])
-            .filter((line) => acceptQty[line.goods_receipt_line_id])
-            .map((line) => ({ goods_receipt_line_id: line.goods_receipt_line_id, quantity: acceptQty[line.goods_receipt_line_id] })),
-        });
+        if (acceptMeta?.lot_writer_cutover) {
+          if (!selectedLot) throw new Error("Select a QA-cleared receipt lot to accept.");
+          await api(`/projects/${pid}/stores/receipt-lots/accept-atomically`, "POST", {
+            lot_id: selectedLot.lot_id,
+            quantity: lotQty || selectedLot.accept_allowed,
+            posting_number: number,
+          });
+        } else {
+          const lines = (receipt?.lines || [])
+            .filter((line) => acceptQty[line.goods_receipt_line_id] && Number(line.accept_allowed || 0) > 0)
+            .map((line) => ({
+              goods_receipt_line_id: line.goods_receipt_line_id,
+              quantity: acceptQty[line.goods_receipt_line_id],
+            }));
+          if (!lines.length) {
+            throw new Error(
+              acceptMeta?.waiting_on_handoff
+                ? "Handoff to Stores is still required on Quality → Material before Accept."
+                : acceptMeta?.waiting_on_quality
+                  ? "Quality Material approval is still required before Accept."
+                  : "Enter an accept quantity on a QA-authorized line.",
+            );
+          }
+          await api(`/projects/${pid}/procurement/stock/acceptances`, "POST", {
+            number,
+            warehouse_id: Number(warehouseId),
+            goods_receipt_id: Number(receiptId),
+            lines,
+          });
+        }
       } else if (action === "Reserve") {
         await api(`/projects/${pid}/procurement/stock/reservations`, "POST", {
           number,
@@ -3188,6 +4229,8 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
       setPackageId("");
       setReservationId("");
       setAcceptQty({});
+      setLotId("");
+      setLotQty("");
       setReturnQty({});
       onError("");
       await reload();
@@ -3213,8 +4256,13 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
         })}
       </ol>
       <p className="note-card note-alert">
-        A goods receipt does not add stock. Accept it into a warehouse first. Reserve holds available quantity. Issue cannot exceed what is available. A return puts issued quantity back. Inspection, matching, and payment stay closed.
+        Flow: post goods receipt → Quality → Material approve → Handoff to Stores → Accept here. A goods receipt alone does not add stock.
       </p>
+      {acceptMeta ? (
+        <p className={`note-card ${acceptMeta.ready_to_accept ? "note-good" : "note-alert"}`} role="status">
+          Ready to accept: {acceptMeta.ready_to_accept}. Waiting on Quality: {acceptMeta.waiting_on_quality}. Waiting on Handoff: {acceptMeta.waiting_on_handoff}. {acceptMeta.note}
+        </p>
+      ) : null}
       <table>
         <thead>
           <tr>
@@ -3281,11 +4329,62 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
           {ready && context.warehouses.length === 0 && action !== "Return" && (
             <p className="note-card note-alert">Create a warehouse in Master data before accepting stock.</p>
           )}
-          {action === "Accept" && (
+          {action === "Accept" && acceptMeta?.lot_writer_cutover && (
+            <>
+              <p className="note-card note-alert">Lot cutover is on. Accept uses QA-cleared receipt lots (legacy Accept is blocked).</p>
+              <label>
+                Receipt lot
+                <select
+                  aria-label="Stock lot"
+                  value={lotId}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setLotId(next);
+                    const lot = lotSources.find((row) => String(row.lot_id) === next);
+                    setLotQty(lot?.accept_allowed || "");
+                    if (lot) setWarehouseId(String(lot.warehouse_id));
+                  }}
+                  required
+                >
+                  <option value="">Select lot</option>
+                  {lotSources.map((row) => (
+                    <option key={row.lot_id} value={row.lot_id}>
+                      {row.lot_code} · {row.item_code} · up to {row.accept_allowed} {row.unit}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              {ready && lotSources.length === 0 && (
+                <p className="note-card note-alert">No QA-attributed lots are ready. Complete Quality → Material → Handoff (with warehouse on the GR).</p>
+              )}
+              {selectedLot ? (
+                <label>
+                  Accept quantity (max {selectedLot.accept_allowed} {selectedLot.unit})
+                  <input aria-label="Lot accept quantity" value={lotQty} onChange={(e) => setLotQty(e.target.value)} required />
+                </label>
+              ) : null}
+            </>
+          )}
+          {action === "Accept" && !acceptMeta?.lot_writer_cutover && (
             <>
               <label>
                 Goods receipt
-                <select aria-label="Stock receipt" value={receiptId} onChange={(e) => setReceiptId(e.target.value)} required>
+                <select
+                  aria-label="Stock receipt"
+                  value={receiptId}
+                  onChange={(e) => {
+                    const next = e.target.value;
+                    setReceiptId(next);
+                    const source = acceptSources.find((row) => String(row.goods_receipt_id) === next);
+                    const seeded: Record<number, string> = {};
+                    (source?.lines || []).forEach((line) => {
+                      if (Number(line.accept_allowed || 0) > 0) seeded[line.goods_receipt_line_id] = line.accept_allowed || "";
+                    });
+                    setAcceptQty(seeded);
+                    if (source?.warehouse_id) setWarehouseId(String(source.warehouse_id));
+                  }}
+                  required
+                >
                   <option value="">Select receipt</option>
                   {acceptSources.map((row) => (
                     <option key={row.goods_receipt_id} value={row.goods_receipt_id}>
@@ -3294,13 +4393,27 @@ function Stock({ pid, context, onError }: { pid: number; context: Context; onErr
                   ))}
                 </select>
               </label>
-              {ready && acceptSources.length === 0 && <p className="note-card note-alert">No posted receipt is waiting to be accepted.</p>}
+              {ready && acceptSources.length === 0 && (
+                <p className="note-card note-alert">No posted receipt has quantity left to accept.</p>
+              )}
+              {ready && acceptSources.length > 0 && acceptMeta && acceptMeta.ready_to_accept === 0 && (
+                <p className="note-card note-alert">
+                  {acceptMeta.waiting_on_quality > 0
+                    ? "Receipts are waiting on Quality → Material approval."
+                    : acceptMeta.waiting_on_handoff > 0
+                      ? "Quality is done. Open Quality → Material and click Handoff to Stores, then return here."
+                      : "No QA-authorized quantity is ready to accept yet."}
+                </p>
+              )}
               {receipt?.lines.map((line) => (
                 <label key={line.goods_receipt_line_id}>
-                  {line.item_code} still to accept {line.remaining} {line.unit}
+                  {line.item_code} · remaining {line.remaining} {line.unit}
+                  {line.accept_allowed != null ? ` · allowed ${line.accept_allowed}` : ""}
+                  {line.blocker ? <em className="muted"> — {line.blocker}</em> : null}
                   <input
                     aria-label={`Accept quantity ${line.item_code}`}
                     value={acceptQty[line.goods_receipt_line_id] || ""}
+                    disabled={!(Number(line.accept_allowed || 0) > 0)}
                     onChange={(e) => setAcceptQty((current) => ({ ...current, [line.goods_receipt_line_id]: e.target.value }))}
                   />
                 </label>

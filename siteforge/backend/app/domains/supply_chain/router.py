@@ -127,13 +127,49 @@ def save_specification_template(
 @router.get("/procurement/items/approval-capability")
 def catalogue_approval_capability(u: User = Depends(authenticated), db: Session = Depends(get_db)):
     """Expose approval UI eligibility; backend decision endpoint still enforces RBAC."""
+    config = _catalogue_config(db, u)
     try:
         _catalogue_approve_role(db, u)
+        can_approve = True
     except HTTPException as error:
         if error.status_code == 403:
-            return {"can_approve": False}
-        raise
-    return {"can_approve": True}
+            can_approve = False
+        else:
+            raise
+    return {
+        "can_approve": can_approve,
+        "submitted_status": config.get("submitted_status"),
+        "stages": config.get("stages"),
+        "approve_permission": config.get("approve_permission"),
+        "decision_reason_min_length": config.get("decision_reason_min_length"),
+        "enforce_separation_of_duties": config.get("enforce_separation_of_duties"),
+    }
+
+
+@router.get("/procurement/catalogue-masters/approval-config")
+def get_catalogue_approval_config(u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from app.domains.identity_projects.models import Role
+    from .catalogue_approval_config import get_config_or_defaults
+
+    config = get_config_or_defaults(db, u.organization_id)
+    permission = config["approve_permission"]
+    roles = db.query(Role).order_by(Role.name).all()
+    granted_roles = [
+        {"id": role.id, "name": role.name}
+        for role in roles
+        if permission in (role.permissions or [])
+    ]
+    return {**config, "roles_with_permission": granted_roles}
+
+
+@router.put("/procurement/catalogue-masters/approval-config")
+def save_catalogue_approval_config(data: dict, u: User = Depends(admin), db: Session = Depends(get_db)):
+    from .catalogue_approval_config import config_payload, save_config
+
+    row = save_config(db, u, data)
+    audit(db, u, "update", "procurement_catalogue_approval_config", row.id)
+    commit(db)
+    return config_payload(row)
 
 
 @router.get("/procurement/items")
@@ -147,14 +183,49 @@ def items(u: User = Depends(authenticated), db: Session = Depends(get_db)):
     return [service.item_payload(row, db) for row in rows]
 
 
+@router.post("/procurement/items/duplicate-check")
+def catalogue_duplicate_check(data: ItemIn, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    """Preview exact and possible duplicates before create/update. Does not write."""
+    service._org_master(db, u)
+    exclude_id = None
+    return service._item_duplicate_matches(db, u, data, exclude_id=exclude_id)
+
+
+def _catalogue_export_rows(db, user):
+    service._org_master(db, user)
+    from .catalogue_exchange import rows_from_items
+
+    items = (
+        db.query(ProcurementItem)
+        .filter_by(organization_id=user.organization_id)
+        .order_by(ProcurementItem.code)
+        .all()
+    )
+    return rows_from_items(db, items)
+
+
 @router.get("/procurement/items/export.csv")
 def export_catalogue(u: User = Depends(authenticated), db: Session = Depends(get_db)):
-    """Organization-scoped CSV export with structured technical attributes."""
+    """Organization-scoped CSV using import-compatible columns (plus status fields)."""
     from .catalogue_exchange import export_catalogue_csv
-    rows = (db.query(ProcurementItem).filter_by(organization_id=u.organization_id)
-            .order_by(ProcurementItem.code).all())
-    return Response(export_catalogue_csv(rows), media_type="text/csv; charset=utf-8",
-                    headers={"Content-Disposition": "attachment; filename=catalogue-items.csv"})
+
+    return Response(
+        export_catalogue_csv(_catalogue_export_rows(db, u)),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": "attachment; filename=catalogue-items.csv"},
+    )
+
+
+@router.get("/procurement/items/export.xlsx")
+def export_catalogue_xlsx(u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    """Excel export that can be edited and re-imported via Import items."""
+    from .catalogue_exchange import export_catalogue_xlsx
+
+    return Response(
+        export_catalogue_xlsx(_catalogue_export_rows(db, u)),
+        media_type=SHEET,
+        headers={"Content-Disposition": "attachment; filename=catalogue-items.xlsx"},
+    )
 
 
 @router.post("/procurement/items", status_code=201)
@@ -191,14 +262,14 @@ def _catalogue_item(db, u, item_id):
     return item
 
 
-def _catalogue_approve_role(db, user):
-    # Explicit permission, not procurement.master.edit: a catalogue editor must not
-    # become an approver automatically. Organization administrators retain authority.
-    from .catalogue_authorization import can_approve_catalogue
+def _catalogue_config(db, user):
+    from .catalogue_approval_config import get_config_or_defaults
+    return get_config_or_defaults(db, user.organization_id)
+
+
+def _catalogue_user_permissions(db, user):
     from app.domains.identity_projects.models import Membership, Project, Role
 
-    if user.organization_admin:
-        return
     memberships = (
         db.query(Membership)
         .join(Project, Project.id == Membership.project_id)
@@ -213,7 +284,18 @@ def _catalogue_approve_role(db, user):
         role = db.get(Role, membership.role_id)
         if role:
             permissions.extend(role.permissions or [])
-    if not can_approve_catalogue(False, permissions):
+    return permissions
+
+
+def _catalogue_approve_role(db, user):
+    # Explicit permission, not procurement.master.edit: a catalogue editor must not
+    # become an approver automatically. Organization administrators retain authority.
+    from .catalogue_approval_config import can_approve_with_config
+
+    if user.organization_admin:
+        return
+    config = _catalogue_config(db, user)
+    if not can_approve_with_config(False, _catalogue_user_permissions(db, user), config):
         raise HTTPException(403, "Catalogue approval permission required")
 
 
@@ -225,6 +307,28 @@ def _catalogue_decision(db, u, item, action, reason):
             "attributes": dict(item.specification_attributes or {})}))
 
 
+@router.post("/procurement/items/{item_id}/activation")
+def set_catalogue_item_activation(item_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    """Activate or deactivate an approved catalogue item without rewriting historical transactions."""
+    service._org_master(db, u)
+    item = _catalogue_item(db, u, item_id)
+    if item.approval_status != "Approved":
+        raise HTTPException(409, "Only approved catalogue items can be activated or deactivated here")
+    if not isinstance(data, dict) or "active" not in data or type(data.get("active")) is not bool:
+        raise HTTPException(422, "Expected active boolean")
+    reason = str(data.get("reason") or "").strip()
+    if len(reason) < 3:
+        raise HTTPException(422, "Enter a reason of at least 3 characters")
+    if item.active == data["active"]:
+        return service.item_payload(item, db)
+    item.active = data["active"]
+    from .catalogue_specification_history import record_item_history
+    record_item_history(db, u, item, "Activated" if item.active else "Deactivated", reason)
+    audit(db, u, "activate" if item.active else "deactivate", "procurement_items", item.id, {"reason": reason})
+    commit(db)
+    return service.item_payload(item, db)
+
+
 @router.post("/procurement/items/{item_id}/submit")
 def submit_catalogue_item(item_id: int, u: User = Depends(authenticated), db: Session = Depends(get_db)):
     item = _catalogue_item(db, u, item_id)
@@ -232,13 +336,14 @@ def submit_catalogue_item(item_id: int, u: User = Depends(authenticated), db: Se
         raise HTTPException(409, "Only draft or rejected items can be submitted")
     if item.created_by != u.id and not u.organization_admin:
         raise HTTPException(403, "Only the creator or organization administrator can submit")
-    item.approval_status = "Pending Approval"
+    config = _catalogue_config(db, u)
+    item.approval_status = config.get("submitted_status") or "Under Review"
     item.submitted_by = u.id
     item.active = False
     _catalogue_decision(db, u, item, "Submitted", "Submitted for review")
     from .catalogue_specification_history import record_item_history
     record_item_history(db, u, item, "Submitted", "Submitted for review")
-    audit(db, u, "submit", "procurement_items", item.id)
+    audit(db, u, "submit", "procurement_items", item.id, {"status": item.approval_status})
     commit(db)
     return service.item_payload(item, db)
 
@@ -246,12 +351,16 @@ def submit_catalogue_item(item_id: int, u: User = Depends(authenticated), db: Se
 @router.post("/procurement/items/{item_id}/decision")
 def catalogue_decision(item_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
     from .catalogue_approval import validate_decision
+    from .catalogue_approval_config import pending_statuses
     action, reason = validate_decision(data)
+    config = _catalogue_config(db, u)
+    if config.get("require_decision_reason") and len(reason.strip()) < int(config.get("decision_reason_min_length") or 3):
+        raise HTTPException(422, f"Decision reason must contain at least {config.get('decision_reason_min_length')} characters")
     _catalogue_approve_role(db, u)
     item = _catalogue_item(db, u, item_id)
-    if item.approval_status != "Pending Approval":
+    if item.approval_status not in pending_statuses(config):
         raise HTTPException(409, "Item is not pending approval")
-    if item.submitted_by == u.id or item.created_by == u.id:
+    if config.get("enforce_separation_of_duties", True) and (item.submitted_by == u.id or item.created_by == u.id):
         raise HTTPException(403, "Creator/submitter cannot approve or reject own item")
     item.approval_status = "Approved" if action == "Approve" else "Rejected"
     item.active = action == "Approve"
@@ -261,6 +370,37 @@ def catalogue_decision(item_id: int, data: dict, u: User = Depends(authenticated
     audit(db, u, action.lower(), "procurement_items", item.id, {"reason": reason})
     commit(db)
     return service.item_payload(item, db)
+
+
+@router.get("/procurement/items/{item_id}/files")
+def catalogue_item_files(item_id: int, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    item = _catalogue_item(db, u, item_id)
+    return service._files(db, "catalogue_items", item.id)
+
+
+@router.post("/procurement/items/{item_id}/files", status_code=201)
+async def catalogue_item_file(
+    item_id: int,
+    upload: UploadFile = File(...),
+    u: User = Depends(authenticated),
+    db: Session = Depends(get_db),
+):
+    service._org_master(db, u)
+    item = _catalogue_item(db, u, item_id)
+    if item.approval_status not in ("Draft", "Rejected"):
+        raise HTTPException(409, "Attachments can be added only while the item is Draft or Rejected")
+    stored = store_file(db, u, upload.filename or "file", upload.content_type or "", await upload.read())
+    link = ProcurementFile(
+        organization_id=u.organization_id,
+        resource="catalogue_items",
+        resource_id=item.id,
+        file_id=stored.id,
+        created_by=u.id,
+    )
+    db.add(link)
+    audit(db, u, "upload", "procurement_items", item.id, {"file": stored.original_name})
+    commit(db)
+    return {"id": link.id, "file_id": stored.id, "name": stored.original_name, "size": stored.size}
 
 
 @router.get("/procurement/items/{item_id}/amendments")
@@ -370,9 +510,14 @@ def catalogue_review_history(item_id: int, u: User = Depends(authenticated), db:
 
 
 @router.get("/procurement/items/template")
-def item_template(u: User = Depends(authenticated)):
-    _ = u
-    return Response(service.item_template(), media_type=SHEET)
+def item_template(u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    """Blank Catalogue sheet plus Allowed_Masters values for this organization."""
+    service._org_master(db, u)
+    return Response(
+        service.item_template(db, u),
+        media_type=SHEET,
+        headers={"Content-Disposition": "attachment; filename=catalogue-import-pack.xlsx"},
+    )
 
 
 @router.post("/procurement/items/import")
@@ -387,6 +532,295 @@ async def import_items(
         audit(db, u, "import", "procurement_items", u.organization_id, {"saved": result["saved"]})
         commit(db)
     return result
+
+
+@router.get("/procurement/catalogue-masters/categories")
+def catalogue_categories(
+    discipline: str | None = None,
+    include_inactive: bool = False,
+    u: User = Depends(authenticated),
+    db: Session = Depends(get_db),
+):
+    from . import catalogue_masters as masters
+    return masters.list_categories(db, u.organization_id, discipline=discipline, include_inactive=include_inactive)
+
+
+@router.post("/procurement/catalogue-masters/categories", status_code=201)
+def create_catalogue_category(data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    service._org_master(db, u)
+    row = masters.save_category(
+        db, u,
+        discipline=str(data.get("discipline", "")),
+        name=str(data.get("name", "")),
+        active=bool(data.get("active", True)),
+        qa_document_types=data.get("qa_document_types"),
+    )
+    audit(db, u, "create", "procurement_catalogue_categories", row.id)
+    commit(db)
+    return masters.category_payload(row)
+
+
+@router.put("/procurement/catalogue-masters/categories/{category_id}")
+def update_catalogue_category(category_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueCategory
+    service._org_master(db, u)
+    row = db.get(CatalogueCategory, category_id)
+    if not row or row.organization_id != u.organization_id:
+        raise HTTPException(404, "Category not found")
+    row = masters.save_category(
+        db, u,
+        discipline=str(data.get("discipline", row.discipline)),
+        name=str(data.get("name", row.name)),
+        active=bool(data.get("active", row.active)),
+        qa_document_types=data.get("qa_document_types", getattr(row, "qa_document_types", [])),
+        row=row,
+    )
+    audit(db, u, "update", "procurement_catalogue_categories", row.id)
+    commit(db)
+    return masters.category_payload(row)
+
+
+@router.post("/procurement/catalogue-masters/subcategories", status_code=201)
+def create_catalogue_subcategory(data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    service._org_master(db, u)
+    row = masters.save_subcategory(
+        db, u, category_id=int(data.get("category_id") or 0), name=str(data.get("name", "")), active=bool(data.get("active", True))
+    )
+    audit(db, u, "create", "procurement_catalogue_subcategories", row.id)
+    commit(db)
+    return masters.subcategory_payload(row)
+
+
+@router.put("/procurement/catalogue-masters/subcategories/{subcategory_id}")
+def update_catalogue_subcategory(subcategory_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueSubcategory
+    service._org_master(db, u)
+    row = db.get(CatalogueSubcategory, subcategory_id)
+    if not row or row.organization_id != u.organization_id:
+        raise HTTPException(404, "Subcategory not found")
+    row = masters.save_subcategory(
+        db, u,
+        category_id=int(data.get("category_id", row.category_id)),
+        name=str(data.get("name", row.name)),
+        active=bool(data.get("active", row.active)),
+        row=row,
+    )
+    audit(db, u, "update", "procurement_catalogue_subcategories", row.id)
+    commit(db)
+    return masters.subcategory_payload(row)
+
+
+@router.get("/procurement/catalogue-masters/uoms")
+def catalogue_uoms(include_inactive: bool = False, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueUom
+    query = db.query(CatalogueUom).filter_by(organization_id=u.organization_id)
+    if not include_inactive:
+        query = query.filter_by(active=True)
+    return [masters.uom_payload(row) for row in query.order_by(CatalogueUom.code).all()]
+
+
+@router.post("/procurement/catalogue-masters/uoms", status_code=201)
+def create_catalogue_uom(data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    service._org_master(db, u)
+    row = masters.save_uom(db, u, code=str(data.get("code", "")), name=str(data.get("name", "")), active=bool(data.get("active", True)))
+    audit(db, u, "create", "procurement_uoms", row.id)
+    commit(db)
+    return masters.uom_payload(row)
+
+
+@router.put("/procurement/catalogue-masters/uoms/{uom_id}")
+def update_catalogue_uom(uom_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueUom
+    service._org_master(db, u)
+    row = db.get(CatalogueUom, uom_id)
+    if not row or row.organization_id != u.organization_id:
+        raise HTTPException(404, "UOM not found")
+    row = masters.save_uom(
+        db, u, code=str(data.get("code", row.code)), name=str(data.get("name", row.name)), active=bool(data.get("active", row.active)), row=row
+    )
+    audit(db, u, "update", "procurement_uoms", row.id)
+    commit(db)
+    return masters.uom_payload(row)
+
+
+@router.get("/procurement/catalogue-masters/grades")
+def catalogue_grades(include_inactive: bool = False, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueMaterialGrade
+    query = db.query(CatalogueMaterialGrade).filter_by(organization_id=u.organization_id)
+    if not include_inactive:
+        query = query.filter_by(active=True)
+    return [masters.grade_payload(row) for row in query.order_by(CatalogueMaterialGrade.code).all()]
+
+
+@router.post("/procurement/catalogue-masters/grades", status_code=201)
+def create_catalogue_grade(data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    service._org_master(db, u)
+    row = masters.save_grade(
+        db, u,
+        code=str(data.get("code", "")),
+        name=str(data.get("name", "")),
+        discipline=str(data.get("discipline", "")),
+        active=bool(data.get("active", True)),
+    )
+    audit(db, u, "create", "procurement_material_grades", row.id)
+    commit(db)
+    return masters.grade_payload(row)
+
+
+@router.put("/procurement/catalogue-masters/grades/{grade_id}")
+def update_catalogue_grade(grade_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueMaterialGrade
+    service._org_master(db, u)
+    row = db.get(CatalogueMaterialGrade, grade_id)
+    if not row or row.organization_id != u.organization_id:
+        raise HTTPException(404, "Material grade not found")
+    row = masters.save_grade(
+        db, u,
+        code=str(data.get("code", row.code)),
+        name=str(data.get("name", row.name)),
+        discipline=str(data.get("discipline", row.discipline)),
+        active=bool(data.get("active", row.active)),
+        row=row,
+    )
+    audit(db, u, "update", "procurement_material_grades", row.id)
+    commit(db)
+    return masters.grade_payload(row)
+
+
+@router.get("/procurement/catalogue-masters/standards")
+def catalogue_standards(include_inactive: bool = False, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueStandard
+    query = db.query(CatalogueStandard).filter_by(organization_id=u.organization_id)
+    if not include_inactive:
+        query = query.filter_by(active=True)
+    return [masters.standard_payload(row) for row in query.order_by(CatalogueStandard.code).all()]
+
+
+@router.post("/procurement/catalogue-masters/standards", status_code=201)
+def create_catalogue_standard(data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    service._org_master(db, u)
+    row = masters.save_standard(
+        db, u, code=str(data.get("code", "")), title=str(data.get("title", "")), active=bool(data.get("active", True))
+    )
+    audit(db, u, "create", "procurement_standards", row.id)
+    commit(db)
+    return masters.standard_payload(row)
+
+
+@router.put("/procurement/catalogue-masters/standards/{standard_id}")
+def update_catalogue_standard(standard_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueStandard
+    service._org_master(db, u)
+    row = db.get(CatalogueStandard, standard_id)
+    if not row or row.organization_id != u.organization_id:
+        raise HTTPException(404, "Standard not found")
+    row = masters.save_standard(
+        db, u, code=str(data.get("code", row.code)), title=str(data.get("title", row.title)), active=bool(data.get("active", row.active)), row=row
+    )
+    audit(db, u, "update", "procurement_standards", row.id)
+    commit(db)
+    return masters.standard_payload(row)
+
+
+@router.get("/procurement/catalogue-masters/manufacturers")
+def catalogue_manufacturers(include_inactive: bool = False, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueManufacturer
+    query = db.query(CatalogueManufacturer).filter_by(organization_id=u.organization_id)
+    if not include_inactive:
+        query = query.filter_by(active=True)
+    return [masters.manufacturer_payload(row) for row in query.order_by(CatalogueManufacturer.code).all()]
+
+
+@router.post("/procurement/catalogue-masters/manufacturers", status_code=201)
+def create_catalogue_manufacturer(data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    service._org_master(db, u)
+    row = masters.save_manufacturer(
+        db, u, code=str(data.get("code", "")), name=str(data.get("name", "")), active=bool(data.get("active", True))
+    )
+    audit(db, u, "create", "procurement_manufacturers", row.id)
+    commit(db)
+    return masters.manufacturer_payload(row)
+
+
+@router.put("/procurement/catalogue-masters/manufacturers/{manufacturer_id}")
+def update_catalogue_manufacturer(manufacturer_id: int, data: dict, u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    from .models import CatalogueManufacturer
+    service._org_master(db, u)
+    row = db.get(CatalogueManufacturer, manufacturer_id)
+    if not row or row.organization_id != u.organization_id:
+        raise HTTPException(404, "Manufacturer not found")
+    row = masters.save_manufacturer(
+        db, u, code=str(data.get("code", row.code)), name=str(data.get("name", row.name)), active=bool(data.get("active", row.active)), row=row
+    )
+    audit(db, u, "update", "procurement_manufacturers", row.id)
+    commit(db)
+    return masters.manufacturer_payload(row)
+
+
+@router.post("/procurement/catalogue-masters/seed-categories")
+def seed_catalogue_categories(u: User = Depends(authenticated), db: Session = Depends(get_db)):
+    from . import catalogue_masters as masters
+    service._org_master(db, u)
+    created = masters.seed_categories_from_templates(db, u)
+    audit(db, u, "seed", "procurement_catalogue_categories", u.organization_id, {"created": created})
+    commit(db)
+    return {"created_or_reactivated": created}
+
+
+@router.get("/procurement/items/match-suggestions")
+def catalogue_match_suggestions(
+    q: str = "",
+    unit: str = "",
+    specification: str = "",
+    limit: int = Query(10, ge=1, le=50),
+    u: User = Depends(authenticated),
+    db: Session = Depends(get_db),
+):
+    from .catalogue_exchange import is_approved_item
+    from .catalogue_match import score_item_match
+    rows = (
+        db.query(ProcurementItem)
+        .filter_by(organization_id=u.organization_id, active=True, approval_status="Approved")
+        .order_by(ProcurementItem.code)
+        .limit(500)
+        .all()
+    )
+    line = type("Line", (), {"description": q, "specification": specification, "unit": unit, "reference": ""})()
+    scored = []
+    for item in rows:
+        result = score_item_match(line, item)
+        if result["score"] <= 0 and not is_approved_item(item):
+            continue
+        if q and result["score"] < 15:
+            continue
+        scored.append({
+            "id": item.id,
+            "code": item.code,
+            "description": item.description,
+            "base_unit": item.base_unit,
+            "material_grade": getattr(item, "material_grade", "") or "",
+            "score": result["score"],
+            "compatible": result["compatible"],
+            "reasons": result["reasons"],
+        })
+    scored.sort(key=lambda row: (-row["score"], row["code"]))
+    return scored[:limit]
 
 
 @router.get("/procurement/conversions")

@@ -599,11 +599,100 @@ header h1 {
   margin: 16px 0;
 }
 .option-grid > h3,
+.option-grid > h4,
 .option-grid > p,
 .option-grid > ul,
-.option-grid > .policy-saved {
+.option-grid > fieldset,
+.option-grid > table,
+.option-grid > .inline,
+.option-grid > .policy-saved,
+.option-grid > .catalogue-snapshot {
   grid-column: 1 / -1;
   margin-bottom: 0;
+}
+.catalogue-snapshot {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-width: 460px;
+  margin: 8px 0 0;
+  font-size: 12px;
+}
+.catalogue-list {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+}
+.catalogue-list.catalogue-list-scroll {
+  max-height: min(280px, 38vh);
+  overflow: auto;
+  padding-right: 4px;
+  border: 1px solid #d7e0e7;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+.catalogue-list .note-card.is-selected,
+.catalogue-list .catalogue-row.is-selected {
+  outline: 2px solid #2f6f8f;
+  background: #f3f9fc;
+}
+.catalogue-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px 12px;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e6edf2;
+  cursor: pointer;
+  background: #fff;
+}
+.catalogue-row:last-child {
+  border-bottom: 0;
+}
+.catalogue-row-main {
+  min-width: 0;
+}
+.catalogue-row-main strong {
+  font-size: 13px;
+}
+.catalogue-row-main .muted {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.35;
+}
+.catalogue-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.catalogue-row-actions .tone-reject,
+.catalogue-row-actions .tone-approve,
+.catalogue-row-actions .tone-note,
+.catalogue-row-actions .tone-submit {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.catalogue-master-hint {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px dashed #c5d4de;
+  border-radius: 8px;
+  background: #f7fafc;
+  font-size: 13px;
+}
+.catalogue-master-hint ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.catalogue-master-hint li {
+  margin: 2px 0;
+}
+.catalogue-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  margin: 12px 0;
 }
 .policy-saved {
   border: 1px solid #d7e0e7;
@@ -2658,7 +2747,7 @@ button.dash-card.const-hand .dash-mark svg { color: #047857; }
 .q-form { border-top-color: #0f766e; }
 .q-ncr { border-top-color: #991b1b; }
 .q-holdcard { border-top-color: #9f1239; }
-.q-dash { border-top-color: #0b2140; }
+.q-dash { border-top-color: #5ba4e0; }
 .q-qual { border-top-color: #b45309; }
 .q-cal { border-top-color: #1e3a8a; }
 .q-dossier { border-top-color: #4338ca; }
@@ -4309,6 +4398,9 @@ button.proc-tab.is-on { color: #fff; }
 .mto-missing { color: #be123c; font-style: normal; font-weight: 700; }
 .mto-flag { display: inline-block; margin: 0 4px 4px 0; padding: 2px 8px; border-radius: 999px; background: #ffedd5; color: #9a3412; font-size: 11px; font-weight: 700; }
 .mto-ok { display: inline-block; padding: 2px 8px; border-radius: 999px; background: #dcfce7; color: #166534; font-size: 11px; font-weight: 700; }
+.mto-match { display: grid; gap: 6px; min-width: 180px; }
+.mto-match select { min-width: 180px; max-width: 280px; }
+.mto-match small { display: block; line-height: 1.35; }
 .mto-evidence { white-space: nowrap; color: #475569; }
 .mto-evidence small { display: block; color: #64748b; }
 .mto-conf { margin-left: 6px; padding: 1px 6px; border-radius: 999px; background: #e0f2fe; color: #0369a1; font-size: 11px; font-weight: 700; }
@@ -4586,24 +4678,69 @@ body{
   background:transparent !important;
 }
 
-/* Keep navigation/header structured, but avoid over-dark canvas in the work area. */
+/* Keep navigation/header structured on a light daylight surface. */
 .shell-home aside,
 .shell.shell-home > aside,
 aside{
-  background:linear-gradient(180deg,rgba(7,30,56,.96),rgba(10,36,66,.94)) !important;
+  background:linear-gradient(180deg, rgba(241,247,252,.96), rgba(233,242,249,.97)) !important;
 }
 
+/* Scope chrome only — do not paint every nested <header> (cards, ed-head, KPIs) navy. */
+.shell > main > header,
+.shell-home > main > header,
 .ref-topbar,
-header{
-  background:#08284d !important;
-  border-bottom-color:rgba(205,221,239,.45) !important;
+.ref-partner-top{
+  background:rgba(255,255,255,.94) !important;
+  border-bottom:1px solid var(--zb-ui-border) !important;
+  color:var(--zb-ui-text-strong) !important;
+  box-shadow:0 6px 16px rgba(18,55,97,.05);
 }
-header h1,
+.shell > main > header h1,
+.shell-home > main > header h1,
 .ref-topbar,
-.ref-topbar .ref-topbrand{
-  color:#fff;
+.ref-topbar .ref-topbrand,
+.ref-partner-top{
+  color:var(--zb-ui-text-strong) !important;
 }
-header .logout{background:#fff !important;}
+.shell > main > header .eyebrow,
+.shell-home > main > header .eyebrow{
+  color:var(--zb-ui-muted) !important;
+}
+header .logout{background:#fff !important;color:var(--zb-ui-text-strong) !important;}
+
+/* Restore module/card headers that were crushed by the old global navy rule. */
+.ed-head{
+  background:linear-gradient(120deg, #fff7ed, #ffffff 60%, #f0f9ff) !important;
+  border:1px solid #e2e8f0 !important;
+  color:#0f172a !important;
+  box-shadow:none !important;
+}
+.ed-head h2,
+.ed-head small,
+.ed-head .muted{color:inherit !important;}
+.ed-card header{
+  background:linear-gradient(180deg, #f0f9ff, #fff) !important;
+  border-bottom:1px solid #e0f2fe !important;
+  color:#0c4a6e !important;
+}
+.ed-card header h3{color:#0c4a6e !important;}
+.ed-card header .ed-total,
+.ed-card header .ed-total strong,
+.ed-card header .ed-total span{color:#0f172a !important;}
+.contact-card header,
+.contact-card.q-dash header,
+article.contact-card > header{
+  background:linear-gradient(180deg, #eef6fc, #f8fafc) !important;
+  color:var(--zb-ui-text-strong) !important;
+  border-radius:8px;
+  padding:8px 10px;
+  margin:-4px -4px 10px;
+  border-bottom:1px solid #e2eef8 !important;
+}
+.contact-card header strong,
+.contact-card.q-dash header strong{
+  color:var(--zb-ui-text-strong) !important;
+}
 
 /* Shared banner treatment used everywhere. */
 .ref-dashboard .ref-banner,
@@ -4739,7 +4876,9 @@ header .logout{background:#fff !important;}
   --zb-day-sidebar-border:rgba(202,219,235,.86);
   --zb-day-sidebar-text:#123761;
   --zb-day-sidebar-muted:#6a86a5;
-  --zb-day-sidebar-active:#1968c9;
+  --zb-day-sidebar-active:#d9ebfb;
+  --zb-day-sidebar-active-text:#123761;
+  --zb-day-sidebar-active-border:#b7d4ef;
 }
 
 /* Brighten the left shell region too, instead of a dark block. */
@@ -4793,15 +4932,15 @@ nav button:hover:not(.active),
 nav button.active,
 .sidebar-foot button.active,
 .shell-home aside button.active{
-  background:linear-gradient(180deg,#1d72d7,#165fbc) !important;
-  border-color:#165fbc !important;
-  color:#fff !important;
-  box-shadow:0 10px 18px rgba(22,95,188,.23) !important;
+  background:var(--zb-day-sidebar-active) !important;
+  border-color:var(--zb-day-sidebar-active-border) !important;
+  color:var(--zb-day-sidebar-active-text) !important;
+  box-shadow:0 6px 14px rgba(18,55,97,.08) !important;
 }
 nav button.active svg,
 .sidebar-foot button.active svg,
 .shell-home aside button.active svg{
-  color:#fff !important;
+  color:#1968c9 !important;
 }
 nav button em{box-shadow:none}
 
@@ -4814,11 +4953,11 @@ nav button em{box-shadow:none}
     url('/hero-plant.jpg') right top / cover no-repeat fixed !important;
 }
 
-/* Internal/partner top bars: keep navy brand strip but soften with cleaner spacing. */
+/* Internal/partner top bars stay light with soft daylight chrome. */
 .ref-topbar,
 .ref-partner-top{
-  border:1px solid rgba(8,40,77,.08);
-  box-shadow:0 6px 16px rgba(8,40,77,.08);
+  border:1px solid rgba(184,212,236,.7);
+  box-shadow:0 6px 16px rgba(18,55,97,.05);
 }
 
 /* Partner portal wrapper gets same daylight page surface. */

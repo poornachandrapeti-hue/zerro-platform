@@ -28,6 +28,8 @@ services:
       OCR_ENDPOINT: ${OCR_ENDPOINT:-}
       OCR_API_KEY: ${OCR_API_KEY:-}
       OCR_TIMEOUT_SECONDS: ${OCR_TIMEOUT_SECONDS:-90}
+      # Keep false until lot cutover rehearsal passes. true disables legacy Accept/Reserve/Issue.
+      STORES_LOT_WRITER_CUTOVER: ${STORES_LOT_WRITER_CUTOVER:-false}
     command: ["alembic", "upgrade", "head"]
     depends_on:
       db:

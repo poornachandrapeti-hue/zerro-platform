@@ -5,7 +5,7 @@ from pydantic import Field
 
 from app.domains.identity_projects.schemas import Strict
 
-ITEM_TYPES = ("Material", "Equipment", "Consumable", "Spare")
+ITEM_TYPES = ("Material", "Equipment", "Consumable", "Spare", "Tool")
 PRIORITIES = ("Normal", "High", "Critical")
 VENDOR_STATES = ("Pending", "Approved", "Suspended")
 
@@ -15,17 +15,31 @@ class ItemIn(Strict):
     description: str = Field(min_length=1, max_length=300)
     item_type: str
     category: str = Field(min_length=1, max_length=120)
+    subcategory: str = Field(default="", max_length=120)
     discipline_ids: list[int] = Field(min_length=1)
     specification: str = ""
     size_rating: str = ""
+    material_grade: str = Field(default="", max_length=120)
+    applicable_standard: str = Field(default="", max_length=200)
     specification_discipline: str = ""
-    specification_attributes: dict[str, str | int | float] = Field(default_factory=dict)
+    specification_attributes: dict[str, str | int | float | bool | list[str]] = Field(default_factory=dict)
     base_unit: str = Field(min_length=1, max_length=20)
+    purchase_unit: str = Field(default="", max_length=20)
+    issue_unit: str = Field(default="", max_length=20)
     approved_make: str = ""
+    model_number: str = Field(default="", max_length=120)
+    manufacturer_part_number: str = Field(default="", max_length=120)
+    hsn_code: str = Field(default="", max_length=20)
     inspection_required: bool = False
     tracking_required: bool = False
+    mtc_required: bool = False
+    calibration_certificate_required: bool = False
+    shelf_life_applicable: bool = False
+    shelf_life_days: int | None = Field(default=None, ge=1, le=36500)
+    preferred_vendor_id: int | None = Field(default=None, gt=0)
     active: bool = True
     version: int | None = Field(default=None, gt=0)
+    allow_duplicate: bool = False
 
 
 class ConversionIn(Strict):

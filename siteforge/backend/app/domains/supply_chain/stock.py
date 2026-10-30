@@ -212,29 +212,164 @@ def on_hand_count(db, project_id):
     )
 
 
+def _lot_writer_cutover_on():
+    return os.getenv("STORES_LOT_WRITER_CUTOVER", "false").lower() == "true"
+
+
+def _accept_line_status(db, line):
+    """Physical remaining vs Quality/Stores handoff authorization for Accept."""
+    from app.domains.quality.material import quality_accepted
+
+    remaining = _amount(line.quantity) - accepted_qty(db, line.id)
+    quality = _amount(quality_accepted(db, line.id))
+    stores = _qa_accept_limit(db, line.id)
+    allowed = max(Decimal("0"), min(quality, stores) - accepted_qty(db, line.id))
+    handoff_done = _qa_case(db, line.id) is not None and stores > 0
+    if remaining <= 0:
+        blocker = "Already fully accepted into stock."
+    elif quality <= 0:
+        blocker = "Quality → Material: approve accepted quantity first."
+    elif not handoff_done:
+        blocker = "Quality → Material: click Handoff to Stores on this line."
+    elif allowed <= 0:
+        blocker = "All QA-authorized quantity is already on hand."
+    else:
+        blocker = None
+    return {
+        "remaining": remaining,
+        "quality_accepted": quality,
+        "stores_accepted": stores,
+        "accept_allowed": allowed,
+        "handoff_done": handoff_done,
+        "blocker": blocker,
+    }
+
+
+def _lot_accept_sources(db, project):
+    """Lots with remaining QA-accepted quantity available for atomic acceptance."""
+    from sqlalchemy import func
+    from app.domains.stores_inventory.models import (
+        StoresReceiptLot,
+        StoresInspectionCase,
+        StoresLotQAAttribution,
+        StoresPostingLotAllocation,
+    )
+
+    rows = []
+    lots = (
+        db.query(StoresReceiptLot)
+        .filter_by(project_id=project.id, organization_id=project.organization_id)
+        .order_by(StoresReceiptLot.id.desc())
+        .limit(500)
+        .all()
+    )
+    for lot in lots:
+        case = db.query(StoresInspectionCase).filter_by(goods_receipt_line_id=lot.goods_receipt_line_id).first()
+        if case is None or case.status not in ("Pending Inspection", "Disposition Recorded"):
+            continue
+        qa_approved = _amount(
+            db.query(func.coalesce(func.sum(StoresLotQAAttribution.quantity), 0))
+            .filter_by(
+                receipt_lot_id=lot.id,
+                inspection_case_id=case.id,
+                disposition="Accepted",
+                case_version_at_entry=case.version,
+            )
+            .scalar()
+        )
+        already = _amount(
+            db.query(func.coalesce(func.sum(StoresPostingLotAllocation.quantity), 0))
+            .join(StockPostingLine, StoresPostingLotAllocation.stock_posting_line_id == StockPostingLine.id)
+            .join(StockPosting, StockPostingLine.posting_id == StockPosting.id)
+            .filter(
+                StoresPostingLotAllocation.receipt_lot_id == lot.id,
+                StockPosting.kind == "Accept",
+                StockPosting.status == "Posted",
+            )
+            .scalar()
+        )
+        available = min(_amount(lot.quantity), qa_approved) - already
+        if available <= 0:
+            continue
+        line = db.get(GoodsReceiptLine, lot.goods_receipt_line_id)
+        item, unit = _receipt_item(db, line) if line else (None, "")
+        if item is None:
+            continue
+        rows.append(
+            {
+                "lot_id": lot.id,
+                "lot_code": lot.lot_code,
+                "goods_receipt_line_id": lot.goods_receipt_line_id,
+                "warehouse_id": lot.warehouse_id,
+                "item_id": item.id,
+                "item_code": item.code,
+                "unit": unit,
+                "accept_allowed": format(available, "f"),
+                "batch_number": lot.batch_number,
+                "heat_number": lot.heat_number,
+            }
+        )
+    return rows
+
+
 def accept_sources(db, project):
+    from app.domains.quality.material import quality_accepted  # noqa: F401 — kept for clarity/tests
+
     chosen = []
+    waiting_on_quality = 0
+    waiting_on_handoff = 0
+    ready_to_accept = 0
     receipts = db.query(GoodsReceipt).filter_by(project_id=project.id, status="Posted").order_by(GoodsReceipt.number)
     for receipt in receipts:
         lines = []
         for line in db.query(GoodsReceiptLine).filter_by(goods_receipt_id=receipt.id):
-            remaining = _amount(line.quantity) - accepted_qty(db, line.id)
-            if remaining <= 0:
+            status = _accept_line_status(db, line)
+            if status["remaining"] <= 0:
                 continue
             item, unit = _receipt_item(db, line)
+            if status["blocker"] and "Quality → Material: approve" in (status["blocker"] or ""):
+                waiting_on_quality += 1
+            elif status["blocker"] and "Handoff to Stores" in (status["blocker"] or ""):
+                waiting_on_handoff += 1
+            elif status["accept_allowed"] > 0:
+                ready_to_accept += 1
             lines.append(
                 {
                     "goods_receipt_line_id": line.id,
                     "item_id": item.id,
                     "item_code": item.code,
                     "quantity": format(_amount(line.quantity), "f"),
-                    "remaining": format(remaining, "f"),
+                    "remaining": format(status["remaining"], "f"),
+                    "quality_accepted": format(status["quality_accepted"], "f"),
+                    "stores_accepted": format(status["stores_accepted"], "f"),
+                    "accept_allowed": format(status["accept_allowed"], "f"),
+                    "handoff_done": status["handoff_done"],
+                    "blocker": status["blocker"],
                     "unit": unit,
                 }
             )
         if lines:
-            chosen.append({"goods_receipt_id": receipt.id, "number": receipt.number, "lines": lines})
-    return chosen
+            chosen.append(
+                {
+                    "goods_receipt_id": receipt.id,
+                    "number": receipt.number,
+                    "warehouse_id": receipt.warehouse_id,
+                    "lines": lines,
+                }
+            )
+    return {
+        "lot_writer_cutover": _lot_writer_cutover_on(),
+        "waiting_on_quality": waiting_on_quality,
+        "waiting_on_handoff": waiting_on_handoff,
+        "ready_to_accept": ready_to_accept,
+        "sources": chosen,
+        "lot_sources": _lot_accept_sources(db, project),
+        "note": (
+            "Lot writers are active; use Lot accept."
+            if _lot_writer_cutover_on()
+            else "Legacy Accept is active. Lot accept stays standby until STORES_LOT_WRITER_CUTOVER=true."
+        ),
+    }
 
 
 def issue_sources(db, project):
@@ -363,8 +498,20 @@ def accept_receipt(db, user, project, data):
             raise HTTPException(422, "Accepted quantity cannot exceed the receipt quantity still waiting")
         from app.domains.quality.material import quality_accepted
 
-        allowed = min(quality_accepted(db, line.id), _qa_accept_limit(db, line.id)) - accepted_qty(db, line.id)
+        quality = _amount(quality_accepted(db, line.id))
+        stores = _qa_accept_limit(db, line.id)
+        allowed = min(quality, stores) - accepted_qty(db, line.id)
         if quantity > allowed:
+            if quality <= 0:
+                raise HTTPException(
+                    422,
+                    "Quality has not accepted this quantity yet. Complete Quality → Material approve, then Handoff to Stores.",
+                )
+            if stores <= 0:
+                raise HTTPException(
+                    422,
+                    "Handoff to Stores is required before stock accept (Quality → Material → Handoff to Stores).",
+                )
             raise HTTPException(422, "Stores can put on hand only the quantity quality has accepted")
         item, unit = _receipt_item(db, line)
         chosen.append((line, item, unit, quantity))

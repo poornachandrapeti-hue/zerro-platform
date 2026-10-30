@@ -27,3 +27,15 @@ def test_extended_template_rejects_unknown_field():
     with pytest.raises(HTTPException) as exc:
         validate_attributes("Telecom / ELV", "CCTV", {"fabricated_field": "unexpected"})
     assert exc.value.status_code == 422
+
+
+def test_builtin_field_meta_exposes_select_enums():
+    civil = next(group for group in list_templates() if group["discipline"] == "Civil")
+    concrete = next(category for category in civil["categories"] if category["name"] == "Concrete")
+    grade = next(field for field in concrete["fields"] if field["key"] == "grade")
+    assert grade["type"] == "select"
+    assert "M30" in grade["options"]
+    assert grade["required"] is True
+    reinforcement = next(category for category in civil["categories"] if category["name"] == "Reinforcement")
+    steel = next(field for field in reinforcement["fields"] if field["key"] == "steel_grade")
+    assert "Fe500" in steel["options"]

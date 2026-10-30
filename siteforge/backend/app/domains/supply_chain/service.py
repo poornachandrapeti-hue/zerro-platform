@@ -936,32 +936,46 @@ def create_requisition(db, user, project, data):
 def update_requisition(db, user, project, row, data):
     if row.status not in EDITABLE:
         raise HTTPException(409, "An approved or in-review requisition stays as submitted")
-    if any(line.estimated_price is not None for line in data.lines) and not _commercial(db, user, project):
+    commercial = _commercial(db, user, project)
+    if any(line.estimated_price is not None for line in data.lines) and not commercial:
         raise HTTPException(403, "Estimated prices require commercial access")
     permitted(db, user, project, "procurement.requisition.edit", row.discipline_id)
     _company_actor(db, user, project, row.company_id)
-    if any(line.estimated_price is not None for line in data.lines) and not data.currency.strip():
-        raise HTTPException(422, "Enter a currency when estimated prices are used")
-    if not any(line.estimated_price is not None for line in data.lines) and data.currency.strip():
-        raise HTTPException(422, "Currency is entered only when estimated prices are used")
+    if commercial:
+        if any(line.estimated_price is not None for line in data.lines) and not data.currency.strip():
+            raise HTTPException(422, "Enter a currency when estimated prices are used")
+        if not any(line.estimated_price is not None for line in data.lines) and data.currency.strip():
+            raise HTTPException(422, "Currency is entered only when estimated prices are used")
+    preserved_prices = {
+        line.requirement_line_id: line.estimated_price
+        for line in db.query(RequisitionLine).filter_by(requisition_id=row.id)
+    }
+    preserved_currency = row.currency or ""
     _bump(db, PurchaseRequisition, row.id, data.version, {"modified_by": user.id})
     db.refresh(row)
     row.request_date = data.request_date
     row.required_delivery = data.required_delivery
     row.justification = data.justification
-    row.currency = data.currency.strip().upper()
+    row.currency = data.currency.strip().upper() if commercial else preserved_currency
     row.number = data.number.strip()
     row.number_key = _key(data.number)
     _stamp(row, user)
     for line in db.query(RequisitionLine).filter_by(requisition_id=row.id):
         db.delete(line)
     db.flush()
-    _sync_requisition_lines(db, user, project, row, data.lines)
+    _sync_requisition_lines(
+        db,
+        user,
+        project,
+        row,
+        data.lines,
+        preserve_prices=None if commercial else preserved_prices,
+    )
     _event(db, user, project.id, "requisitions", row.id, "updated")
     return row
 
 
-def _sync_requisition_lines(db, user, project, row, incoming):
+def _sync_requisition_lines(db, user, project, row, incoming, preserve_prices=None):
     seen = set()
     for index, item in enumerate(incoming, start=1):
         source_line = db.get(RequirementLine, item.requirement_line_id)
@@ -985,6 +999,9 @@ def _sync_requisition_lines(db, user, project, row, incoming):
         if _amount(item.quantity) > _amount(source_line.quantity) - reserved - allocated(db, source_line.id):
             raise HTTPException(422, "Quantity is above the remaining approved requirement")
         stored = db.get(ProcurementItem, source_line.item_id)
+        price = item.estimated_price
+        if preserve_prices is not None:
+            price = preserve_prices.get(item.requirement_line_id)
         db.add(
             RequisitionLine(
                 requisition_id=row.id,
@@ -994,7 +1011,7 @@ def _sync_requisition_lines(db, user, project, row, incoming):
                 specification=source_line.specification,
                 quantity=item.quantity,
                 unit=source_line.unit,
-                estimated_price=item.estimated_price,
+                estimated_price=price,
             )
         )
         _ = stored
@@ -1021,6 +1038,7 @@ def submit_requisition(db, user, project, row, version):
 
 def resubmit_requisition(db, user, project, row, data):
     permitted(db, user, project, "procurement.requisition.edit", row.discipline_id)
+    _company_actor(db, user, project, row.company_id)
     if row.status != "Returned for Correction":
         raise HTTPException(409, "Only a returned requisition can be resubmitted")
     instance = (
@@ -1031,7 +1049,15 @@ def resubmit_requisition(db, user, project, row, data):
     )
     if not instance:
         raise HTTPException(409, "The returned review was not found")
+    policy = _policy(db, project, REQUISITION, row.company_id, row.discipline_id)
+    if not policy:
+        raise HTTPException(422, "Mandatory reviewer configuration is missing")
+    _authority(db, project, policy)
     _resubmit(db, user, project, instance, data.review_version)
+    # Pick up the latest active route and treat the resubmitter as the submitter
+    # so the named reviewer is not blocked by self-approval rules.
+    instance.policy_id = policy.id
+    instance.submitted_by = user.id
     _bump(
         db,
         PurchaseRequisition,
@@ -1189,18 +1215,87 @@ def flag_revision(db, user, revision_id, detail):
         )
 
 
+def _item_duplicate_matches(db, user, data, exclude_id=None):
+    from .catalogue_duplicates import (
+        classify_match,
+        normalize_mpn,
+        normalize_text,
+        summarize_duplicates,
+        technical_fingerprint,
+    )
+
+    mpn = normalize_mpn(getattr(data, "manufacturer_part_number", ""))
+    fingerprint = technical_fingerprint(
+        category=data.category,
+        subcategory=getattr(data, "subcategory", "") or "",
+        description=data.description,
+        material_grade=getattr(data, "material_grade", "") or "",
+        manufacturer_part_number=getattr(data, "manufacturer_part_number", "") or "",
+        size_rating=getattr(data, "size_rating", "") or "",
+        specification_attributes=getattr(data, "specification_attributes", None) or {},
+    )
+    description_key = normalize_text(data.description)
+    query = db.query(ProcurementItem).filter_by(organization_id=user.organization_id)
+    if exclude_id:
+        query = query.filter(ProcurementItem.id != exclude_id)
+    matches = []
+    for candidate in query.limit(500).all():
+        match_type = classify_match(
+            candidate,
+            mpn=mpn,
+            fingerprint=fingerprint,
+            description_key=description_key,
+            category=data.category,
+        )
+        if not match_type:
+            continue
+        matches.append(
+            {
+                "id": candidate.id,
+                "code": candidate.code,
+                "description": candidate.description,
+                "category": candidate.category,
+                "subcategory": getattr(candidate, "subcategory", "") or "",
+                "manufacturer_part_number": getattr(candidate, "manufacturer_part_number", "") or "",
+                "approval_status": candidate.approval_status,
+                "match_type": match_type,
+            }
+        )
+    return summarize_duplicates(matches)
+
+
 def save_item(db, user, data, row=None):
     _org_master(db, user)
     if row is not None and row.approval_status not in ("Draft", "Rejected"):
         raise HTTPException(409, "Submitted or approved item cannot be edited; use a controlled revision")
     if data.item_type not in ITEM_TYPES:
-        raise HTTPException(422, "Type must be Material, Equipment, Consumable, or Spare")
+        raise HTTPException(422, "Type must be Material, Equipment, Consumable, Spare, or Tool")
+    if getattr(data, "shelf_life_applicable", False) and not getattr(data, "shelf_life_days", None):
+        raise HTTPException(422, "Enter shelf life days when shelf life applies")
+    if getattr(data, "hsn_code", "") and not str(data.hsn_code).replace(" ", "").isalnum():
+        raise HTTPException(422, "HSN code must be alphanumeric")
+    preferred_vendor_id = getattr(data, "preferred_vendor_id", None)
+    if preferred_vendor_id:
+        vendor = db.get(Vendor, preferred_vendor_id)
+        if not vendor or vendor.organization_id != user.organization_id or not vendor.active:
+            raise HTTPException(422, "Choose an active preferred vendor from this organization")
     disciplines = []
     for discipline_id in data.discipline_ids:
         discipline = db.get(Discipline, discipline_id)
         if not discipline:
             raise HTTPException(422, "Choose a discipline from the organization list")
         disciplines.append(discipline.id)
+    discipline_name = getattr(data, "specification_discipline", "") or ""
+    if not discipline_name and disciplines:
+        first = db.get(Discipline, disciplines[0])
+        discipline_name = first.name if first else ""
+    from .catalogue_masters import enforce_item_masters
+    if discipline_name:
+        enforce_item_masters(db, user, data, discipline_name)
+    duplicates = _item_duplicate_matches(db, user, data, exclude_id=row.id if row is not None else None)
+    if duplicates["blocking"] and not getattr(data, "allow_duplicate", False):
+        codes = ", ".join(item["code"] for item in duplicates["exact"][:5])
+        raise HTTPException(409, f"Exact catalogue duplicate detected ({codes}). Confirm allow_duplicate to proceed or revise identity fields.")
     # Preserve structured attributes on unrelated legacy item edits. Category changes
     # invalidate old attributes unless a matching new set is provided.
     existing_category = row.category if row is not None else None
@@ -1226,26 +1321,49 @@ def save_item(db, user, data, row=None):
         row.item_type = data.item_type
         row.category = data.category
         row.base_unit = data.base_unit.strip()
+    purchase_unit = (getattr(data, "purchase_unit", "") or "").strip() or row.base_unit
+    issue_unit = (getattr(data, "issue_unit", "") or "").strip() or row.base_unit
+    row.purchase_unit = purchase_unit
+    row.issue_unit = issue_unit
+    row.subcategory = (getattr(data, "subcategory", "") or "").strip()
     row.discipline_ids = disciplines
     flag_modified(row, "discipline_ids")
     from .specification_templates import validate_configured_attributes
+    template_row = db.query(CatalogueSpecificationTemplate).filter_by(
+        organization_id=user.organization_id,
+        discipline=data.specification_discipline or discipline_name,
+        category=data.category,
+        active=True,
+    ).first() if (data.specification_discipline or discipline_name) else None
     if data.specification_attributes:
         # Use the discipline name from the authenticated organization's master, never a client-supplied ID alone.
         if not data.specification_discipline:
             raise HTTPException(422, "Select a specification discipline")
         names = [db.get(Discipline, discipline_id).name for discipline_id in disciplines]
-        if data.specification_discipline not in names and not db.query(CatalogueSpecificationTemplate).filter_by(organization_id=user.organization_id, discipline=data.specification_discipline, category=data.category, active=True).first():
+        if data.specification_discipline not in names and not template_row:
             raise HTTPException(422, "Specification discipline must match the item's assigned discipline")
         row.specification_attributes = validate_configured_attributes(db, user.organization_id, data.specification_discipline, data.category, data.specification_attributes)
+        row.specification_template_version = template_row.version if template_row else None
     elif existing_category == data.category and existing_attributes:
         row.specification_attributes = existing_attributes
     else:
         row.specification_attributes = {}
+        row.specification_template_version = None
     row.specification = data.specification
     row.size_rating = data.size_rating
+    row.material_grade = (getattr(data, "material_grade", "") or "").strip()
+    row.applicable_standard = (getattr(data, "applicable_standard", "") or "").strip()
     row.approved_make = data.approved_make
+    row.model_number = (getattr(data, "model_number", "") or "").strip()
+    row.manufacturer_part_number = (getattr(data, "manufacturer_part_number", "") or "").strip()
+    row.hsn_code = (getattr(data, "hsn_code", "") or "").strip()
     row.inspection_required = data.inspection_required
     row.tracking_required = data.tracking_required
+    row.mtc_required = bool(getattr(data, "mtc_required", False))
+    row.calibration_certificate_required = bool(getattr(data, "calibration_certificate_required", False))
+    row.shelf_life_applicable = bool(getattr(data, "shelf_life_applicable", False))
+    row.shelf_life_days = getattr(data, "shelf_life_days", None) if row.shelf_life_applicable else None
+    row.preferred_vendor_id = preferred_vendor_id
     row.active = False if row.approval_status == "Draft" else data.active
     _stamp(row, user)
     db.flush()
@@ -1253,28 +1371,51 @@ def save_item(db, user, data, row=None):
 
 
 def item_payload(row, db):
+    from .catalogue_masters import qa_documents_for_item
+
+    disciplines = [
+        db.get(Discipline, discipline_id).name
+        for discipline_id in (row.discipline_ids or [])
+        if db.get(Discipline, discipline_id)
+    ]
     return {
         "id": row.id,
         "code": row.code,
         "description": row.description,
         "item_type": row.item_type,
         "category": row.category,
+        "subcategory": getattr(row, "subcategory", "") or "",
         "discipline_ids": row.discipline_ids or [],
-        "disciplines": [
-            db.get(Discipline, discipline_id).name
-            for discipline_id in (row.discipline_ids or [])
-            if db.get(Discipline, discipline_id)
-        ],
+        "disciplines": disciplines,
         "specification": row.specification,
         "specification_attributes": row.specification_attributes or {},
         "approval_status": row.approval_status,
         "size_rating": row.size_rating,
+        "material_grade": getattr(row, "material_grade", "") or "",
+        "applicable_standard": getattr(row, "applicable_standard", "") or "",
         "base_unit": row.base_unit,
+        "purchase_unit": getattr(row, "purchase_unit", "") or row.base_unit,
+        "issue_unit": getattr(row, "issue_unit", "") or row.base_unit,
         "approved_make": row.approved_make,
+        "model_number": getattr(row, "model_number", "") or "",
+        "manufacturer_part_number": getattr(row, "manufacturer_part_number", "") or "",
+        "hsn_code": getattr(row, "hsn_code", "") or "",
         "inspection_required": row.inspection_required,
         "tracking_required": row.tracking_required,
+        "mtc_required": bool(getattr(row, "mtc_required", False)),
+        "calibration_certificate_required": bool(getattr(row, "calibration_certificate_required", False)),
+        "shelf_life_applicable": bool(getattr(row, "shelf_life_applicable", False)),
+        "shelf_life_days": getattr(row, "shelf_life_days", None),
+        "preferred_vendor_id": getattr(row, "preferred_vendor_id", None),
+        "specification_template_version": getattr(row, "specification_template_version", None),
+        "qa_document_types": qa_documents_for_item(db, row.organization_id, disciplines[0] if disciplines else "", row.category),
         "active": row.active,
         "version": row.version,
+        "created_by": row.created_by,
+        "created_at": row.created_at.isoformat() if getattr(row, "created_at", None) else None,
+        "modified_by": getattr(row, "modified_by", None),
+        "modified_at": row.modified_at.isoformat() if getattr(row, "modified_at", None) else None,
+        "files": _files(db, "catalogue_items", row.id),
     }
 
 
@@ -1559,10 +1700,246 @@ def _workbook(headers):
     return buffer.getvalue()
 
 
-def item_template():
-    return _workbook(
-        ["code", "description", "type", "category", "disciplines", "specification", "size", "unit", "make", "inspection", "tracking"]
+# Map common alternate headings onto the import template names.
+_IMPORT_HEADER_ALIASES = {
+    "item_code": "code",
+    "itemcode": "code",
+    "item_type": "type",
+    "itemtype": "type",
+    "item_description": "description",
+    "desc": "description",
+    "category_name": "category",
+    "item_category": "category",
+    "material_category": "category",
+    "cat": "category",
+    "sub_category": "subcategory",
+    "sub_cat": "subcategory",
+    "base_unit": "unit",
+    "uom": "unit",
+    "unit_of_measure": "unit",
+    "purchase_uom": "purchase_unit",
+    "issue_uom": "issue_unit",
+    "size_rating": "size",
+    "applicable_standard": "standard",
+    "approved_make": "make",
+    "manufacturer": "make",
+    "brand": "make",
+    "model_number": "model",
+    "manufacturer_part_number": "mpn",
+    "mpn_number": "mpn",
+    "hsn_code": "hsn",
+    "discipline": "disciplines",
+    "discipline_name": "disciplines",
+    "discipline_names": "disciplines",
+}
+
+
+def _normalize_import_header(raw):
+    text = str(raw or "").strip().casefold()
+    text = "_".join(text.replace("-", " ").split())
+    return _IMPORT_HEADER_ALIASES.get(text, text)
+
+
+def _row_value(header, row, index):
+    if index < 0 or index >= len(row):
+        return ""
+    value = row[index]
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _resolve_import_value(header, row, canonical, extras=()):
+    """Read a field by canonical name, aliases, or a close header label."""
+    for name in (canonical, *extras):
+        if name in header:
+            text = _row_value(header, row, header.index(name))
+            if text:
+                return text
+    for index, label in enumerate(header):
+        if not label or label == canonical:
+            continue
+        # Avoid matching subcategory when asking for category.
+        if canonical == "category" and "sub" in label.split("_"):
+            continue
+        tokens = set(label.split("_"))
+        if canonical in tokens or label.endswith(f"_{canonical}") or label.startswith(f"{canonical}_"):
+            text = _row_value(header, row, index)
+            if text:
+                return text
+    return ""
+
+
+def item_template(db=None, user=None):
+    """Blank import workbook plus an Allowed_Masters sheet for clients.
+
+    When db/user are provided, Allowed_Masters is filled from this organization's
+    active catalogue masters and discipline list so uploads can copy exact values.
+    """
+    from .catalogue_exchange import IMPORT_COLUMNS
+    from .models import (
+        CatalogueCategory,
+        CatalogueManufacturer,
+        CatalogueMaterialGrade,
+        CatalogueStandard,
+        CatalogueSubcategory,
+        CatalogueUom,
     )
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Catalogue"
+    headers = list(IMPORT_COLUMNS)
+    sheet.append(headers)
+
+    disciplines = []
+    categories = []
+    uoms = []
+    grades = []
+    standards = []
+    manufacturers = []
+    if db is not None and user is not None:
+        disciplines = [row.name for row in db.query(Discipline).order_by(Discipline.name).all()]
+        categories = (
+            db.query(CatalogueCategory)
+            .filter_by(organization_id=user.organization_id, active=True)
+            .order_by(CatalogueCategory.discipline, CatalogueCategory.name)
+            .all()
+        )
+        uoms = (
+            db.query(CatalogueUom)
+            .filter_by(organization_id=user.organization_id, active=True)
+            .order_by(CatalogueUom.code)
+            .all()
+        )
+        grades = (
+            db.query(CatalogueMaterialGrade)
+            .filter_by(organization_id=user.organization_id, active=True)
+            .order_by(CatalogueMaterialGrade.code)
+            .all()
+        )
+        standards = (
+            db.query(CatalogueStandard)
+            .filter_by(organization_id=user.organization_id, active=True)
+            .order_by(CatalogueStandard.code)
+            .all()
+        )
+        manufacturers = (
+            db.query(CatalogueManufacturer)
+            .filter_by(organization_id=user.organization_id, active=True)
+            .order_by(CatalogueManufacturer.code)
+            .all()
+        )
+
+    sample_discipline = disciplines[0] if disciplines else "Civil"
+    sample_category = next((row.name for row in categories if _key(row.discipline) == _key(sample_discipline)), None)
+    if sample_category is None and categories:
+        sample_category = categories[0].name
+        sample_discipline = categories[0].discipline
+    if sample_category is None:
+        sample_category = "Concrete"
+    sample_unit = uoms[0].code if uoms else "KG"
+
+    sample = {name: "" for name in headers}
+    sample.update(
+        {
+            "code": "SAMPLE-001",
+            "description": "Sample item — delete this row before Confirm",
+            "type": "Material",
+            "category": sample_category,
+            "subcategory": "",
+            "disciplines": sample_discipline,
+            "unit": sample_unit,
+            "purchase_unit": sample_unit,
+            "issue_unit": sample_unit,
+            "inspection": "no",
+            "tracking": "no",
+            "mtc": "no",
+            "calibration": "no",
+            "shelf_life": "no",
+            "specification_attributes": "{}",
+        }
+    )
+    sheet.append([sample[name] for name in headers])
+
+    masters = book.create_sheet("Allowed_Masters")
+    masters.append(["Copy values from this sheet into the Catalogue sheet. Do not rename Catalogue headers."])
+    masters.append([])
+    masters.append(["disciplines (use in column disciplines)"])
+    masters.append(["discipline"])
+    for name in disciplines:
+        masters.append([name])
+    if not disciplines:
+        masters.append(["(none — configure organization disciplines first)"])
+
+    masters.append([])
+    masters.append(["categories (use in column category / subcategory)"])
+    masters.append(["discipline", "category", "subcategory"])
+    if categories:
+        for category in categories:
+            subs = (
+                db.query(CatalogueSubcategory)
+                .filter_by(organization_id=user.organization_id, category_id=category.id, active=True)
+                .order_by(CatalogueSubcategory.name)
+                .all()
+            )
+            if subs:
+                for sub in subs:
+                    masters.append([category.discipline, category.name, sub.name])
+            else:
+                masters.append([category.discipline, category.name, ""])
+    else:
+        masters.append(["(none — seed or create Catalogue reference masters before client upload)"])
+
+    masters.append([])
+    masters.append(["uoms (use in unit / purchase_unit / issue_unit)"])
+    masters.append(["code", "name"])
+    if uoms:
+        for row in uoms:
+            masters.append([row.code, row.name])
+    else:
+        masters.append(["(none — any unit text allowed until UOM masters are added)"])
+
+    masters.append([])
+    masters.append(["material_grades (optional column material_grade)"])
+    masters.append(["code", "name"])
+    if grades:
+        for row in grades:
+            masters.append([row.code, row.name])
+    else:
+        masters.append(["(none)"])
+
+    masters.append([])
+    masters.append(["standards (optional column standard)"])
+    masters.append(["code", "title"])
+    if standards:
+        for row in standards:
+            masters.append([row.code, row.title])
+    else:
+        masters.append(["(none)"])
+
+    masters.append([])
+    masters.append(["manufacturers (optional column make)"])
+    masters.append(["code", "name"])
+    if manufacturers:
+        for row in manufacturers:
+            masters.append([row.code, row.name])
+    else:
+        masters.append(["(none)"])
+
+    guide = book.create_sheet("Instructions")
+    guide.append(["Client catalogue import pack"])
+    guide.append(["1. Open Allowed_Masters and copy exact discipline / category / unit values."])
+    guide.append(["2. Enter items only on the Catalogue sheet. Keep row-1 headers unchanged."])
+    guide.append(["3. Required columns: code, description, type, category, disciplines, unit."])
+    guide.append(["4. type must be Material, Equipment, Consumable, Spare, or Tool."])
+    guide.append(["5. When masters exist, category and unit must match Allowed_Masters exactly."])
+    guide.append(["6. Delete SAMPLE-001 before upload Confirm (or change its code)."])
+    guide.append(["7. After import, items are Draft — Submit and Approve before purchase use."])
+    guide.append(["8. yes/no columns: inspection, tracking, mtc, calibration, shelf_life."])
+    buffer = BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
 
 
 def requirement_template():
@@ -1588,22 +1965,49 @@ def requirement_template():
 
 def _sheet(data):
     try:
-        book = load_workbook(BytesIO(data), data_only=True)
+        # data_only=False keeps typed cell values (safer for freshly filled imports).
+        book = load_workbook(BytesIO(data), data_only=False)
     except Exception as exc:
         raise HTTPException(422, "The file is not a readable Excel workbook") from exc
-    sheet = book.active
+    sheet = None
+    for candidate in book.worksheets:
+        title = (candidate.title or "").casefold()
+        if title in {"catalogue", "items", "import", "item catalogue"}:
+            sheet = candidate
+            break
+    if sheet is None:
+        sheet = book.active
+    if (sheet.title or "").casefold() == "instructions" and len(book.worksheets) > 1:
+        sheet = next((item for item in book.worksheets if (item.title or "").casefold() != "instructions"), sheet)
     rows = list(sheet.iter_rows(values_only=True))
     if not rows:
         raise HTTPException(422, "The workbook is empty")
-    header = [str(cell or "").strip().casefold() for cell in rows[0]]
-    return header, rows[1:]
+    header = [_normalize_import_header(cell) for cell in rows[0]]
+    # Drop trailing blank header placeholders from Excel's used range.
+    while header and header[-1] == "":
+        header.pop()
+    if not header:
+        raise HTTPException(422, "Row 1 must contain the import column headers")
+    body = []
+    width = len(header)
+    for row in rows[1:]:
+        values = list(row or ())
+        if len(values) < width:
+            values.extend([None] * (width - len(values)))
+        body.append(tuple(values[:width]))
+    return header, body
 
 
 def _cell(header, row, name):
     if name not in header:
         return ""
-    value = row[header.index(name)]
-    return "" if value is None else str(value).strip()
+    index = header.index(name)
+    if index >= len(row):
+        return ""
+    value = row[index]
+    if value is None:
+        return ""
+    return str(value).strip()
 
 
 def import_items(db, user, data, mode):
@@ -1619,7 +2023,13 @@ def import_items(db, user, data, mode):
     required = ["code", "description", "type", "category", "disciplines", "unit"]
     missing = [name for name in required if name not in header]
     if missing:
-        raise HTTPException(422, "Missing columns: " + ", ".join(missing))
+        detected = ", ".join(name for name in header if name) or "(none)"
+        raise HTTPException(
+            422,
+            "Missing columns: "
+            + ", ".join(missing)
+            + f". Detected headers: {detected}. Download a fresh blank template and keep row 1 unchanged.",
+        )
     disciplines = {_key(row.name): row for row in db.query(Discipline)}
     duplicate_rows = duplicate_codes(header, rows)
     preview = []
@@ -1635,12 +2045,32 @@ def import_items(db, user, data, mode):
             row_errors.append("code is required")
         if index in duplicate_rows:
             row_errors.append(f"duplicate item code in workbook (rows {', '.join(map(str, duplicate_rows[index]))})")
-        if _cell(header, row, "type") not in ITEM_TYPES:
-            row_errors.append("type must be Material, Equipment, Consumable, or Spare")
-        if not _cell(header, row, "description") or not _cell(header, row, "category") or not _cell(header, row, "unit"):
-            row_errors.append("description, category, and unit are required")
+        item_type = _resolve_import_value(header, row, "type", ("item_type",))
+        description = _resolve_import_value(header, row, "description", ("item_description", "desc"))
+        category = _resolve_import_value(
+            header, row, "category", ("category_name", "item_category", "material_category", "cat")
+        )
+        subcategory = _resolve_import_value(header, row, "subcategory", ("sub_category", "sub_cat"))
+        # Common mistake: value typed only in subcategory — use it as category.
+        if not category and subcategory:
+            category = subcategory
+            subcategory = ""
+        unit = _resolve_import_value(header, row, "unit", ("base_unit", "uom", "unit_of_measure"))
+        if item_type not in ITEM_TYPES:
+            row_errors.append("type must be Material, Equipment, Consumable, Spare, or Tool")
+        blank_required = [label for label, value in (
+            ("description", description),
+            ("category", category),
+            ("unit", unit),
+        ) if not value]
+        if blank_required:
+            row_errors.append(
+                "blank required field(s): "
+                + ", ".join(blank_required)
+                + " — fill column header category (not only subcategory). Example: category=Concrete"
+            )
         if not names:
-            row_errors.append("at least one discipline is required")
+            row_errors.append("at least one discipline is required (column disciplines, e.g. Civil)")
         for name in names:
             found = disciplines.get(_key(name))
             if not found:
@@ -1649,8 +2079,30 @@ def import_items(db, user, data, mode):
                 discipline_ids.append(found.id)
         inspection = _cell(header, row, "inspection").casefold()
         tracking = _cell(header, row, "tracking").casefold()
-        if inspection not in {"", "yes", "no"} or tracking not in {"", "yes", "no"}:
-            row_errors.append("inspection and tracking must be yes or no")
+        mtc = _cell(header, row, "mtc").casefold()
+        calibration = _cell(header, row, "calibration").casefold()
+        shelf_life = _cell(header, row, "shelf_life").casefold()
+        for label, value in (
+            ("inspection", inspection),
+            ("tracking", tracking),
+            ("mtc", mtc),
+            ("calibration", calibration),
+            ("shelf_life", shelf_life),
+        ):
+            if value not in {"", "yes", "no"}:
+                row_errors.append(f"{label} must be yes or no")
+        shelf_life_days_raw = _cell(header, row, "shelf_life_days")
+        shelf_life_days = None
+        if shelf_life == "yes":
+            if not shelf_life_days_raw.isdigit() or int(shelf_life_days_raw) < 1:
+                row_errors.append("shelf_life_days must be a positive whole number when shelf_life is yes")
+            else:
+                shelf_life_days = int(shelf_life_days_raw)
+        elif shelf_life_days_raw:
+            row_errors.append("shelf_life_days is only allowed when shelf_life is yes")
+        spec_attributes, spec_error = _import_specification_attributes(header, row)
+        if spec_error:
+            row_errors.append(spec_error)
         existing = db.query(ProcurementItem).filter_by(
             organization_id=user.organization_id, code_key=_key(code)
         ).first() if code else None
@@ -1659,26 +2111,47 @@ def import_items(db, user, data, mode):
             row_errors.append("this item code already exists")
         if existing and mode == "update" and existing.approval_status not in ("Draft", "Rejected"):
             row_errors.append("approved or submitted item cannot be updated by import; use controlled amendment")
+        candidate = {
+            "row": index,
+            "action": action,
+            "code": code,
+            "discipline_ids": discipline_ids,
+            "description": description,
+            "item_type": item_type,
+            "category": category,
+            "subcategory": subcategory,
+            "specification": _cell(header, row, "specification"),
+            "size_rating": _resolve_import_value(header, row, "size", ("size_rating",)),
+            "material_grade": _cell(header, row, "material_grade"),
+            "applicable_standard": _resolve_import_value(header, row, "standard", ("applicable_standard",)),
+            "base_unit": unit,
+            "purchase_unit": _resolve_import_value(header, row, "purchase_unit", ("purchase_uom",)) or unit,
+            "issue_unit": _resolve_import_value(header, row, "issue_unit", ("issue_uom",)) or unit,
+            "approved_make": _cell(header, row, "make"),
+            "model_number": _cell(header, row, "model"),
+            "manufacturer_part_number": _cell(header, row, "mpn"),
+            "hsn_code": _cell(header, row, "hsn"),
+            "inspection_required": inspection == "yes",
+            "tracking_required": tracking == "yes",
+            "mtc_required": mtc == "yes",
+            "calibration_certificate_required": calibration == "yes",
+            "shelf_life_applicable": shelf_life == "yes",
+            "shelf_life_days": shelf_life_days,
+            "specification_discipline": names[0] if names else "",
+            "specification_attributes": spec_attributes,
+            "version": existing.version if existing else None,
+        }
+        if not row_errors and names:
+            from .catalogue_masters import enforce_item_masters
+
+            try:
+                enforce_item_masters(db, user, ItemInPayload(candidate), names[0])
+            except HTTPException as exc:
+                detail = exc.detail if isinstance(exc.detail, str) else "Catalogue master validation failed"
+                row_errors.append(detail)
         if row_errors:
             errors.append({"row": index, "messages": row_errors})
-        preview.append(
-            {
-                "row": index,
-                "action": action,
-                "code": code,
-                "discipline_ids": discipline_ids,
-                "description": _cell(header, row, "description"),
-                "item_type": _cell(header, row, "type"),
-                "category": _cell(header, row, "category"),
-                "specification": _cell(header, row, "specification"),
-                "size_rating": _cell(header, row, "size"),
-                "base_unit": _cell(header, row, "unit"),
-                "approved_make": _cell(header, row, "make"),
-                "inspection_required": inspection == "yes",
-                "tracking_required": tracking == "yes",
-                "version": existing.version if existing else None,
-            }
-        )
+        preview.append(candidate)
     if errors:
         if mode == "preview":
             return {"errors": errors, "rows": preview, "saved": 0}
@@ -1700,19 +2173,67 @@ def import_items(db, user, data, mode):
     return {"errors": [], "rows": preview, "saved": saved}
 
 
+def _import_specification_attributes(header, row):
+    import json
+
+    attributes = {}
+    raw = _cell(header, row, "specification_attributes")
+    if raw:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            return {}, "specification_attributes must be valid JSON object"
+        if not isinstance(parsed, dict):
+            return {}, "specification_attributes must be a JSON object"
+        attributes.update(parsed)
+    for name in header:
+        if not name.startswith("spec."):
+            continue
+        key = name[5:].strip()
+        if not key:
+            continue
+        value = _cell(header, row, name)
+        if value == "":
+            continue
+        if value.casefold() in {"true", "false"}:
+            attributes[key] = value.casefold() == "true"
+        else:
+            try:
+                attributes[key] = int(value) if "." not in value else float(value)
+            except ValueError:
+                attributes[key] = value
+    return attributes, ""
+
+
 class ItemInPayload:
     def __init__(self, item):
         self.code = item["code"]
         self.description = item["description"]
         self.item_type = item["item_type"]
         self.category = item["category"]
+        self.subcategory = item.get("subcategory", "")
         self.discipline_ids = item["discipline_ids"]
         self.specification = item["specification"]
         self.size_rating = item["size_rating"]
+        self.material_grade = item.get("material_grade", "")
+        self.applicable_standard = item.get("applicable_standard", "")
         self.base_unit = item["base_unit"]
+        self.purchase_unit = item.get("purchase_unit", "") or item["base_unit"]
+        self.issue_unit = item.get("issue_unit", "") or item["base_unit"]
         self.approved_make = item["approved_make"]
+        self.model_number = item.get("model_number", "")
+        self.manufacturer_part_number = item.get("manufacturer_part_number", "")
+        self.hsn_code = item.get("hsn_code", "")
         self.inspection_required = item["inspection_required"]
         self.tracking_required = item["tracking_required"]
+        self.mtc_required = item.get("mtc_required", False)
+        self.calibration_certificate_required = item.get("calibration_certificate_required", False)
+        self.shelf_life_applicable = item.get("shelf_life_applicable", False)
+        self.shelf_life_days = item.get("shelf_life_days")
+        self.preferred_vendor_id = item.get("preferred_vendor_id")
+        self.specification_discipline = item.get("specification_discipline", "")
+        self.specification_attributes = item.get("specification_attributes") or {}
+        self.allow_duplicate = item.get("allow_duplicate", False)
         self.active = True
         self.version = item.get("version")
 

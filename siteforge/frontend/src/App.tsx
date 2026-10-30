@@ -424,7 +424,15 @@ export default function App() {
   const canProcurement =
     admin || session.memberships.some((item) => item.permissions?.includes("procurement.view"));
   const canEquipment = canPlanning;
-  const canStores = admin || session.memberships.some(item => item.permissions?.includes("procurement.master.edit") || item.permissions?.includes("procurement.stock.edit"));
+  const canStores =
+    admin ||
+    session.memberships.some(
+      (item) =>
+        item.permissions?.includes("procurement.master.edit") ||
+        item.permissions?.includes("procurement.stock.edit") ||
+        item.permissions?.includes("procurement.receipt.edit") ||
+        item.permissions?.some((permission) => permission.startsWith("stores.")),
+    );
   const canConstruction =
     admin || session.memberships.some((item) => item.permissions?.includes("construction.view"));
   const canQuality =

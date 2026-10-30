@@ -793,6 +793,105 @@ def reassign_receipt_lot_reservation(pid: int, data: LotReservationReassignIn,
     return result
 
 
+def _provision_default_lot_for_handoff(db, user, project, *, receipt_line_id, line, case, accepted):
+    """Register a default receipt lot + Accepted QA attribution when the GR has a warehouse.
+
+    Prepares the lot-accept path without posting stock. Skips quietly when warehouse
+    or project company is missing so legacy Accept still works after handoff.
+    """
+    from sqlalchemy import func
+    from app.domains.identity_projects.models import ProjectCompany
+    from .models import StoresReceiptLot, StoresLotQAAttribution
+
+    accepted = Decimal(str(accepted or 0))
+    if accepted <= 0:
+        return {"created": False, "warning": "No accepted Quality quantity to attribute to a lot."}
+    receipt = db.get(GoodsReceipt, line.goods_receipt_id)
+    if receipt is None or receipt.warehouse_id is None:
+        return {
+            "created": False,
+            "warning": "Assign a warehouse on the goods receipt to auto-register a lot for lot Accept.",
+        }
+    company_id = project.client_company_id
+    if company_id is None:
+        link = db.query(ProjectCompany).filter_by(project_id=project.id).first()
+        company_id = link.company_id if link else None
+    if company_id is None:
+        return {
+            "created": False,
+            "warning": "Project company is required to auto-register a receipt lot.",
+        }
+    lot_code = f"AUTO-{receipt_line_id}"
+    lot = (
+        db.query(StoresReceiptLot)
+        .filter_by(goods_receipt_line_id=receipt_line_id, lot_code=lot_code, project_id=project.id)
+        .with_for_update()
+        .first()
+    )
+    if lot is None:
+        prior = db.query(func.coalesce(func.sum(StoresReceiptLot.quantity), 0)).filter_by(
+            goods_receipt_line_id=receipt_line_id
+        ).scalar()
+        remaining_for_lots = Decimal(str(line.quantity)) - Decimal(str(prior or 0))
+        lot_qty = min(accepted, remaining_for_lots) if remaining_for_lots > 0 else Decimal("0")
+        if lot_qty <= 0:
+            existing = (
+                db.query(StoresReceiptLot)
+                .filter_by(goods_receipt_line_id=receipt_line_id, project_id=project.id)
+                .order_by(StoresReceiptLot.id)
+                .first()
+            )
+            if existing is None:
+                return {"created": False, "warning": "Receipt line lot capacity is already fully registered."}
+            lot = existing
+        else:
+            lot = StoresReceiptLot(
+                organization_id=user.organization_id,
+                project_id=project.id,
+                goods_receipt_line_id=receipt_line_id,
+                warehouse_id=receipt.warehouse_id,
+                location_id=None,
+                owner_company_id=company_id,
+                custodian_company_id=company_id,
+                lot_code=lot_code,
+                batch_number="",
+                heat_number="",
+                serial_number="",
+                quantity=lot_qty,
+                expiry_date=None,
+                created_by=user.id,
+            )
+            db.add(lot)
+            db.flush()
+    key = f"quality-handoff-lot-accepted-{receipt_line_id}-{case.version}"
+    prior_attr = db.query(StoresLotQAAttribution).filter_by(
+        inspection_case_id=case.id, idempotency_key=key
+    ).first()
+    if prior_attr is None:
+        attributed = db.query(func.coalesce(func.sum(StoresLotQAAttribution.quantity), 0)).filter_by(
+            receipt_lot_id=lot.id, disposition="Accepted"
+        ).scalar()
+        unallocated = Decimal(str(lot.quantity)) - Decimal(str(attributed or 0))
+        qty = min(accepted, unallocated)
+        if qty > 0:
+            db.add(
+                StoresLotQAAttribution(
+                    organization_id=user.organization_id,
+                    project_id=project.id,
+                    inspection_case_id=case.id,
+                    receipt_lot_id=lot.id,
+                    disposition="Accepted",
+                    quantity=qty,
+                    reason="Auto attribution from Quality handoff",
+                    idempotency_key=key,
+                    case_version_at_entry=case.version,
+                    created_by=user.id,
+                )
+            )
+            db.flush()
+    return {"created": True, "lot_id": lot.id, "lot_code": lot.lot_code, "warning": None}
+
+
 @router.post("/inspection-cases/from-quality/{receipt_line_id}/reconcile")
 def reconcile_approved_quality_case(
     pid: int,
@@ -870,11 +969,17 @@ def reconcile_approved_quality_case(
             idempotency_key=f"quality-handoff-{receipt_line_id}-{disposition}",
             actor_id=u.id,
         ))
+    lot_note = _provision_default_lot_for_handoff(
+        db, u, project, receipt_line_id=receipt_line_id, line=line, case=case, accepted=amounts["accepted"]
+    )
     audit(db, u, "quality_handoff", "stores_inspection_cases", case.id,
           details={"receipt_line_id": receipt_line_id,
                    "approved_quality_quantities": {k: str(v) for k, v in amounts.items()},
-                   "stock_posted": False, "lot_release_enabled": False}, project_id=pid)
+                   "stock_posted": False, "lot_release_enabled": False,
+                   "default_lot": lot_note}, project_id=pid)
     commit(db)
     return {**inspection_payload(case), "stock_posted": False,
             "lot_release_enabled": False,
-            "warning": "Receipt-line QA reconciliation only; lot attribution and safe stock issue remain gated."}
+            "default_lot": lot_note,
+            "warning": lot_note.get("warning")
+            or "Receipt-line QA reconciliation done; Accept stock under Procurement → Stock."}

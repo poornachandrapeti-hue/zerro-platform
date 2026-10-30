@@ -97,7 +97,26 @@ type Takeoff = {
   history?: { id: number; kind: string; field: string; old: string; new: string; actor: string; at: string }[];
 };
 
-type Item = { id: number; code: string; description: string; base_unit: string; discipline_ids: number[]; active?: boolean };
+type Item = {
+  id: number;
+  code: string;
+  description: string;
+  base_unit: string;
+  discipline_ids: number[];
+  active?: boolean;
+  approval_status?: string;
+  material_grade?: string;
+};
+type MatchSuggestion = {
+  id: number;
+  code: string;
+  description: string;
+  base_unit: string;
+  material_grade: string;
+  score: number;
+  compatible: boolean;
+  reasons: string[];
+};
 
 type Setup = { ocr: { configured: boolean; provider: string; message: string }; supported: string[]; unsupported: string[] };
 
@@ -342,6 +361,8 @@ export function TakeoffReview({
   const [showHistory, setShowHistory] = useState(false);
   const [form, setForm] = useState({ number: "", required_date: "", purpose: "", priority: "Normal" });
   const [busy, setBusy] = useState(false);
+  const [matchSuggestions, setMatchSuggestions] = useState<Record<number, MatchSuggestion[]>>({});
+  const [matchBusyLine, setMatchBusyLine] = useState<number | null>(null);
   async function load() {
     const fresh = await api<Takeoff>(`/projects/${pid}/takeoffs/${id}`);
     setRow(fresh);
@@ -355,8 +376,29 @@ export function TakeoffReview({
   }
   useEffect(() => {
     void load().catch((err) => onError((err as Error).message));
-    void api<Item[]>("/procurement/items").then((rows) => setItems(rows.filter((item) => item.active !== false))).catch(() => setItems([]));
+    void api<Item[]>("/procurement/items")
+      .then((rows) => setItems(rows.filter((item) => item.active !== false && (item.approval_status ? item.approval_status === "Approved" : true))))
+      .catch(() => setItems([]));
   }, [pid, id]);
+  async function suggestMatches(line: MtoLine) {
+    const value = draft(line);
+    setMatchBusyLine(line.id);
+    try {
+      const params = new URLSearchParams({
+        q: value.description || "",
+        unit: value.unit || "",
+        specification: value.specification || "",
+        limit: "8",
+      });
+      const rows = await api<MatchSuggestion[]>(`/procurement/items/match-suggestions?${params}`);
+      setMatchSuggestions((old) => ({ ...old, [line.id]: rows }));
+      onError("");
+    } catch (err) {
+      onError((err as Error).message);
+    } finally {
+      setMatchBusyLine(null);
+    }
+  }
   useEffect(() => {
     if (!row || !(row.status === "Extracting" || row.job?.status === "Queued" || row.job?.status === "Running")) return;
     const timer = window.setTimeout(() => void load().catch(() => undefined), 3000);
@@ -379,6 +421,15 @@ export function TakeoffReview({
   const lines = row.lines || [];
   const usable = items.filter((item) => item.discipline_ids.includes(row.discipline_id));
   const editable = row.access.edit;
+  function selectedMatchHint(line: MtoLine) {
+    const value = draft(line);
+    const suggestion = (matchSuggestions[line.id] || []).find((row) => row.id === value.item_id);
+    if (!suggestion) return null;
+    if (!suggestion.compatible || suggestion.score < 50) {
+      return `Weak match (${suggestion.score}%): ${suggestion.reasons.join("; ")}. Do not substitute an incompatible catalogue item.`;
+    }
+    return `Match score ${suggestion.score}%: ${suggestion.reasons.slice(0, 2).join("; ")}`;
+  }
   async function send(path: string, body?: unknown, method = "POST") {
     if (busy) return;
     setBusy(true);
@@ -555,6 +606,7 @@ export function TakeoffReview({
                 {lines.map((line) => {
                   const value = draft(line);
                   const dirty = Boolean(drafts[line.id]);
+                  const matchHint = selectedMatchHint(line);
                   return (
                     <tr key={line.id} className={line.flags.length ? "has-flags" : ""}>
                       <td>{line.position}</td>
@@ -588,18 +640,44 @@ export function TakeoffReview({
                       </td>
                       <td>
                         {editable || row.access.match ? (
-                          <select
-                            aria-label={`Catalogue item ${line.position}`}
-                            value={value.item_id || ""}
-                            onChange={(e) => change(line, { item_id: e.target.value ? Number(e.target.value) : null })}
-                          >
-                            <option value="">Not matched</option>
-                            {usable.map((item) => (
-                              <option key={item.id} value={item.id}>
-                                {item.code} · {item.description} ({item.base_unit})
-                              </option>
-                            ))}
-                          </select>
+                          <div className="mto-match">
+                            <select
+                              aria-label={`Catalogue item ${line.position}`}
+                              value={value.item_id || ""}
+                              onChange={(e) => change(line, { item_id: e.target.value ? Number(e.target.value) : null })}
+                            >
+                              <option value="">Not matched</option>
+                              {(matchSuggestions[line.id]?.length
+                                ? matchSuggestions[line.id].map((item) => ({
+                                    id: item.id,
+                                    code: item.code,
+                                    description: `${item.description}${item.material_grade ? ` · ${item.material_grade}` : ""}`,
+                                    base_unit: item.base_unit,
+                                    score: item.score,
+                                  }))
+                                : usable.map((item) => ({
+                                    id: item.id,
+                                    code: item.code,
+                                    description: item.description,
+                                    base_unit: item.base_unit,
+                                    score: null as number | null,
+                                  }))
+                              ).map((item) => (
+                                <option key={item.id} value={item.id}>
+                                  {item.score != null ? `${item.score}% · ` : ""}{item.code} · {item.description} ({item.base_unit})
+                                </option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="tone-note"
+                              disabled={busy || matchBusyLine === line.id}
+                              onClick={() => void suggestMatches(line)}
+                            >
+                              {matchBusyLine === line.id ? "Matching…" : "Suggest match"}
+                            </button>
+                            {matchHint && <small className={matchHint.startsWith("Weak") ? "mto-flag" : "muted"}>{matchHint}</small>}
+                          </div>
                         ) : (
                           line.item_code || <em className="mto-missing">Not matched</em>
                         )}

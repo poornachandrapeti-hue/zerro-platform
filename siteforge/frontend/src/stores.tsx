@@ -302,7 +302,7 @@ export function StoresHome({session, initialProjectId}: {session: Session; initi
     } catch(e) {setError((e as Error).message);}
   }
   async function createMaterialRequest(e: FormEvent) {
-    e.preventDefault(); if(busy) return;
+    e.preventDefault(); if(busy || !canRequestCreate) return;
     if(!requestWbs.trim() && !requestWorkPackage.trim()) {setError("Choose a WBS or work-package reference.");return;}
     const wbs=requestWbs.trim()?Number(requestWbs):null, wp=requestWorkPackage.trim()?Number(requestWorkPackage):null;
     if((wbs!==null && (!Number.isInteger(wbs)||wbs<=0))||(wp!==null&&(!Number.isInteger(wp)||wp<=0))){setError("WBS and work-package IDs must be positive integers.");return;}
@@ -337,7 +337,7 @@ export function StoresHome({session, initialProjectId}: {session: Session; initi
     } catch(e) {setError((e as Error).message);}
   }
   async function allocateSelectedLot(e:FormEvent) {
-    e.preventDefault(); if(!selectedAllocRequest||busy||!canRequest)return;
+    e.preventDefault(); if(!selectedAllocRequest||busy||!canRequestAllocate)return;
     setBusy(true);setError("");setMessage("");
     try {
       await api(`/projects/${pid}/stores/material-requests/${selectedAllocRequest}/allocate-lot`,"POST",{
@@ -409,9 +409,17 @@ export function StoresHome({session, initialProjectId}: {session: Session; initi
       await loadIntake();
     } catch(e){setError((e as Error).message);}finally{setBusy(false);}
   }
-  const canEdit = session.user.organization_admin || session.memberships.some(m => m.project_id === pid && m.permissions?.includes("procurement.master.edit"));
-  const canRequest = session.user.organization_admin || session.memberships.some(m => m.project_id === pid && m.permissions?.includes("procurement.stock.edit"));
-  const canReceive = session.user.organization_admin || session.memberships.some(m => m.project_id === pid && m.permissions?.includes("procurement.receipt.edit"));
+  const hasPerm = (permission: string) =>
+    session.user.organization_admin ||
+    session.memberships.some((m) => m.project_id === pid && m.permissions?.includes(permission));
+  const canEdit = hasPerm("procurement.master.edit");
+  const canStock = hasPerm("procurement.stock.edit");
+  const canReceive = hasPerm("procurement.receipt.edit");
+  const canRequestCreate = hasPerm("stores.requests.create");
+  const canRequestReview = hasPerm("stores.requests.review");
+  const canRequestAllocate = hasPerm("stores.requests.allocate");
+  // Legacy alias: transfer / stock-post actions still use procurement.stock.edit on the API.
+  const canRequest = canStock;
   async function loadReceipts() {
     if (!pid) return;
     try {
@@ -739,9 +747,9 @@ export function StoresHome({session, initialProjectId}: {session: Session; initi
       <p className="note-card">Partner requests enter this same internal review queue. Approvals revalidate the source requirement and released contractor work package; no stock posts here.</p>
       <div className="hr-table-wrap"><table><thead><tr><th>Request</th><th>Origin / company</th><th>Requirement line</th><th>Material</th><th>Quantity</th><th>Required</th><th>Work scope</th><th>Status</th><th>Action</th></tr></thead><tbody>
         {materialRequests.filter(r=>!requestQueueOnly||r.status==="Pending Approval").map(r=><tr key={r.id}><td><strong>{r.request_key}</strong></td><td>{r.requester_company_id?`Partner · company ${r.requester_company_id}`:"Internal"}</td><td>{r.requirement_line_id||"Legacy — link required"}</td><td>{intakeOptions.items.find(i=>i.id===r.item_id)?.code||r.item_id}</td><td>{r.quantity} {r.unit}</td><td>{r.required_date}</td><td>{r.work_package_id?`Work package ${r.work_package_id}`:`WBS ${r.planning_wbs_id}`}</td><td><Pill value={r.status}/></td><td>
-          {r.status==="Draft"&&<button type="button" className="tone-submit" disabled={busy||!canRequest} onClick={()=>void changeMaterialRequest(r,"Submit")}>Submit</button>}
+          {r.status==="Draft"&&<button type="button" className="tone-submit" disabled={busy||!canRequestCreate} onClick={()=>void changeMaterialRequest(r,"Submit")}>Submit</button>}
           {r.status==="Approved"&&<button type="button" className="tone-note" disabled={busy} onClick={()=>void inspectAllocations(r.id)}>View / allocate</button>}
-          {r.status==="Pending Approval"&&canEdit&&<div className="fin-actions"><input aria-label={`Review reason for ${r.request_key}`} placeholder="Review reason" minLength={3} value={requestReviewReasons[r.id]||""} onChange={e=>setRequestReviewReasons(v=>({...v,[r.id]:e.target.value}))}/><button type="button" className="tone-approve" disabled={busy} onClick={()=>void changeMaterialRequest(r,"Approved")}>Approve</button><button type="button" className="tone-reject" disabled={busy} onClick={()=>void changeMaterialRequest(r,"Rejected")}>Reject</button></div>}
+          {r.status==="Pending Approval"&&canRequestReview&&<div className="fin-actions"><input aria-label={`Review reason for ${r.request_key}`} placeholder="Review reason" minLength={3} value={requestReviewReasons[r.id]||""} onChange={e=>setRequestReviewReasons(v=>({...v,[r.id]:e.target.value}))}/><button type="button" className="tone-approve" disabled={busy} onClick={()=>void changeMaterialRequest(r,"Approved")}>Approve</button><button type="button" className="tone-reject" disabled={busy} onClick={()=>void changeMaterialRequest(r,"Rejected")}>Reject</button></div>}
         </td></tr>)}
       </tbody></table>{!materialRequests.length&&<p className="muted">No material requests yet.</p>}</div>
       {selectedAllocRequest!==null&&<div className="note-card">
@@ -751,7 +759,7 @@ export function StoresHome({session, initialProjectId}: {session: Session; initi
         <div className="hr-table-wrap"><table><thead><tr><th>Lot</th><th>Reserved</th><th>Remaining</th><th>Status</th></tr></thead><tbody>
           {allocationOverview.reservations.map(r=><tr key={r.id}><td>{r.lot_id}</td><td>{r.allocated_quantity}</td><td>{r.remaining_quantity}</td><td><Pill value={r.status}/></td></tr>)}
         </tbody></table></div></>}
-        {canRequest&&<form onSubmit={allocateSelectedLot} className="contact-form st-divider">
+        {canRequestAllocate&&<form onSubmit={allocateSelectedLot} className="contact-form st-divider">
           <label>Receipt lot <select required value={allocationLot} onChange={e=>setAllocationLot(Number(e.target.value))}><option value={0}>Select a registered lot</option>{lots.map(l=><option key={l.id} value={l.id}>Lot #{l.id} · batch {l.batch_number||"—"} · heat {l.heat_number||"—"}</option>)}</select></label>
           <label>Reserve quantity <input required type="number" min="0.001" step="0.001" value={allocationQuantity} onChange={e=>setAllocationQuantity(e.target.value)}/></label>
           <label>Unique allocation key <input required maxLength={120} value={allocationKey} onChange={e=>setAllocationKey(e.target.value)}/></label>
@@ -762,7 +770,7 @@ export function StoresHome({session, initialProjectId}: {session: Session; initi
       <h3 className="section-mark st-divider"><ListChecks size={18} strokeWidth={2.4}/> Approved demand awaiting allocation</h3>
       <p className="muted">This is unallocated demand, not a verified warehouse stock shortage.</p>
       <div className="hr-table-wrap"><table><thead><tr><th>Request ID</th><th>Material</th><th>Approved demand</th><th>Unallocated</th></tr></thead><tbody>{materialDemand.map(d=><tr key={d.request_id}><td>{d.request_id}</td><td>{d.item_id}</td><td>{d.approved_demand} {d.unit}</td><td>{d.unallocated_demand} {d.unit}</td></tr>)}</tbody></table></div>
-      {canRequest&&<form onSubmit={createMaterialRequest} className="st-divider"><h3 className="section-mark"><ListChecks size={18} strokeWidth={2.4}/> New material issue request (from approved requirement)</h3>
+      {canRequestCreate&&<form onSubmit={createMaterialRequest} className="st-divider"><h3 className="section-mark"><ListChecks size={18} strokeWidth={2.4}/> New material issue request (from approved requirement)</h3>
         <div className="contact-form">
           <label>Request reference <input required maxLength={120} value={requestKey} onChange={e=>setRequestKey(e.target.value)}/></label>
           <label>Approved Procurement requirement line ID <input type="number" min="1" required value={requestRequirementLine} onChange={e=>setRequestRequirementLine(e.target.value)}/></label>
